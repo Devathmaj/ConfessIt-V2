@@ -94,9 +94,21 @@ server {
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://res.cloudinary.com https://placehold.co; media-src 'self' https://res.cloudinary.com; connect-src 'self' https://${API_ORIGIN} wss://${API_ORIGIN}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
 
     # The SPA is one document: deep links fall back to it, hashed assets cache forever.
+    # `expires -1` makes the shell revalidate on every load, so a deploy is seen
+    # immediately; it does not add a header, so the server-level security headers
+    # still apply.
     location / {
         limit_req zone=edge burst=60 nodelay;
+        expires -1;
         try_files $uri $uri/ /index.html;
+    }
+    # The worker script must never be immutable: it is the thing that discovers
+    # the next deploy. Browsers also bypass the HTTP cache when updating a
+    # worker, but an immutable copy here would still pin old logic in proxies.
+    location = /sw.js {
+        expires off;
+        add_header Cache-Control "no-store" always;
+        access_log off;
     }
     # Local liveness probe for Compose; never proxied to the application.
     location = /healthz {
@@ -121,7 +133,14 @@ server {
         gzip_comp_level 6;
         gzip_types image/svg+xml;
     }
-    location ~* \.(js|css|png|jpg|jpeg|gif|webp|svg|woff2?)$ {
+    # Vite emits content-hashed bundles under /assets/, which is the only place
+    # a one-year immutable lifetime is safe. Unhashed files (sw.js, the manifest,
+    # robots.txt) keep revalidating through the rules above.
+    location ^~ /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable" always;
+    }
+    location ~* \.(png|jpg|jpeg|gif|webp|svg|mp4|webm|ico|woff2?)$ {
         expires 1y;
         add_header Cache-Control "public, immutable" always;
     }

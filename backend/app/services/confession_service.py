@@ -1,6 +1,6 @@
 from ..logger import get_logger
 from fastapi import HTTPException, status
-from sqlalchemy import Float, case, cast, func, or_, select, update
+from sqlalchemy import Float, case, cast, exists, false, func, or_, select, update
 from ..postgres import PostgresClient, get_postgres_client, is_valid_id
 from ..db_models import ConfessionCommentRecord, ConfessionRecord, ReportRecord, UserRecord
 from ..models import Confession, ConfessionComment, ConfessionCreate, CommentCreate, UserDetails, UserInfo, ReportCreate, ConfessionUpdate
@@ -779,8 +779,9 @@ class ConfessionService:
         """One feed page, sorted and counted in SQL.
 
         The sort picker is a SQL ORDER BY, every page a LIMIT/OFFSET, and ``total`` a COUNT
-        under the same filter; every relation behind the page (comments, authors,
-        commenters, reporter ids) is one bulk read grouped in Python, not a query per row.
+        under the same filter. The page also carries the viewer's report flag and each
+        row's report total, so the remaining relations (comments, authors, commenters)
+        are bulk reads grouped in Python, not a query per row.
         """
         skip = max(0, int(skip or 0))
         limit = max(1, min(int(limit or 50), FEED_MAX_LIMIT))
@@ -804,13 +805,51 @@ class ConfessionService:
             # and unindexable).
             ordering = [ConfessionRecord.created_at.desc(), ConfessionRecord.id.asc()]
         with self.sessions() as session:
-            total = session.scalar(
-                select(func.count()).select_from(ConfessionRecord).where(*visible)
-            ) or 0
-            confession_models = session.scalars(
-                select(ConfessionRecord).where(*visible)
+            # One round trip for the page and its total. COUNT(*) OVER () counts the
+            # filtered set before LIMIT; the empty-page fallback below is the only
+            # time a separate count is needed.
+            reported = (
+                exists().where(
+                    ReportRecord.confession_id == ConfessionRecord.id,
+                    ReportRecord.reported_by_id == user_id,
+                )
+                if user_id else false()
+            )
+            # Report totals stay derived from the reports table (not the denormalised
+            # column) so a direct insert cannot disagree with the feed. The correlated
+            # count and EXISTS ride along with the page, replacing a second round trip.
+            report_count = (
+                select(func.count())
+                .where(ReportRecord.confession_id == ConfessionRecord.id)
+                .correlate(ConfessionRecord)
+                .scalar_subquery()
+            )
+            page_rows = session.execute(
+                select(
+                    ConfessionRecord,
+                    func.count().over().label("total"),
+                    reported.label("has_reported"),
+                    report_count.label("report_count"),
+                )
+                .where(*visible)
                 .order_by(*ordering).offset(skip).limit(limit)
             ).all()
+            if page_rows:
+                confession_models = [row[0] for row in page_rows]
+                total = int(page_rows[0][1] or 0)
+                has_reported_by_id = {
+                    str(row[0].id): bool(row[2]) for row in page_rows
+                }
+                report_count_by_id = {
+                    str(row[0].id): int(row[3] or 0) for row in page_rows
+                }
+            else:
+                confession_models = []
+                total = session.scalar(
+                    select(func.count()).select_from(ConfessionRecord).where(*visible)
+                ) or 0
+                has_reported_by_id = {}
+                report_count_by_id = {}
             confession_ids = [str(row.id) for row in confession_models]
             # Newest N comments per confession, ranked in SQL: two bounded reads however
             # long the thread; ``comment_count`` still carries the true total.
@@ -849,28 +888,23 @@ class ConfessionService:
                     select(UserRecord).where(UserRecord.id.in_(wanted_user_ids))
                 ).all()
             } if wanted_user_ids else {}
-            # Reporter ids in two grouped reads (one for confessions, one for comments);
-            # the old code opened a fresh session per row for this.
-            confession_reporters: dict = {}
-            if confession_ids:
-                for target_id, reporter_id in session.execute(
-                    select(ReportRecord.confession_id, ReportRecord.reported_by_id).where(
-                        ReportRecord.confession_id.in_(confession_ids)
-                    )
-                ).all():
-                    confession_reporters.setdefault(str(target_id), []).append(str(reporter_id))
+            # Report totals and the viewer's own report flag rode along with the page;
+            # no separate reports round trip is needed here.
             confession_rows = [self._confession_payload(row, user_id) for row in confession_models]
             comments_by_confession = {}
             for comment in self._hydrate_comments(session, comment_models, user_id, user_map):
                 comments_by_confession.setdefault(comment["confession_id"], []).append(comment)
 
         for confession in confession_rows:
-            reporter_ids = confession_reporters.get(str(confession["id"]), [])
             # Participant-scoped (SEC-002): only the caller's own report state is
-            # disclosed; reporter identities stay server-side, counts preserved.
-            confession["has_reported"] = bool(user_id and user_id in reporter_ids)
+            # disclosed; report_count counts rows, as it always has.
+            confession["has_reported"] = has_reported_by_id.get(
+                str(confession["id"]), False
+            )
             confession["reported_by"] = []
-            confession["report_count"] = len(reporter_ids)
+            confession["report_count"] = report_count_by_id.get(
+                str(confession["id"]), 0
+            )
             confession_id = str(confession["id"])
             confession["comments"] = sorted(
                 comments_by_confession.get(confession_id, []),

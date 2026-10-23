@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -23,6 +22,8 @@ import { FloralDecor } from '@/components/FloralDecor';
 import { StatCard } from '@/components/games/StatCard';
 import { AVAILABLE_GAMES, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
 import { formatPlayedAt, weeklyChallengeProgress } from '@/lib/gamesStats';
+import { CACHE_TIMES, queryKeys } from '@/lib/queryClient';
+import { useApiQuery } from '@/lib/useApiQuery';
 import {
   getFeaturedToday,
   getIndividualLeaderboard,
@@ -58,66 +59,51 @@ export const GamesDashboardPage = () => {
   const { user } = useAuth();
   const notifyPlay = useLaunchPlay();
 
-  const [topPlayers, setTopPlayers] = useState<LeagueIndividualEntry[]>([]);
-  const [standing, setStanding] = useState<LeagueMyStanding | null>(null);
+  // The dashboard's four reads are screen-owned: useQuery keeps an observer on
+  // each shared-cache key, so an invalidation (for example after a round or a
+  // leaderboard finalization) repaints the figures instead of only marking the
+  // cache stale for the next imperative read.
+  const topPlayersQuery = useApiQuery({
+    queryKey: queryKeys.leaderboards.board('individual', { period: 'weekly', limit: 3 }),
+    queryFn: () => getIndividualLeaderboard({ period: 'weekly', limit: 3 }),
+    staleTime: CACHE_TIMES.leaderboards,
+  });
+  const standingQuery = useApiQuery({
+    queryKey: queryKeys.leaderboards.myStanding('individual', { period: 'weekly' }),
+    queryFn: () => getMyLeagueStanding('individual', { period: 'weekly' }),
+    staleTime: CACHE_TIMES.leaderboards,
+  });
+  const summaryQuery = useApiQuery({
+    queryKey: queryKeys.games.summary(),
+    queryFn: getPlayerGameSummary,
+    staleTime: CACHE_TIMES.leaderboards,
+  });
+  const featuredQuery = useApiQuery({
+    queryKey: queryKeys.games.featured(),
+    queryFn: getFeaturedToday,
+    staleTime: CACHE_TIMES.gameConfig,
+  });
+
+  const topPlayers: LeagueIndividualEntry[] = topPlayersQuery.data?.entries ?? [];
+  const standing: LeagueMyStanding | null = standingQuery.data ?? null;
   // The caller's own history. `stats === null` covers both "no rounds yet"
   // and "could not load"; `statsState` keeps those two apart for the copy.
-  const [stats, setStats] = useState<PlayerGameSummary | null>(null);
-  const [statsState, setStatsState] = useState<LoadState>('loading');
+  const stats: PlayerGameSummary | null = summaryQuery.data ?? null;
+  const statsState: LoadState = summaryQuery.isPending
+    ? 'loading'
+    : summaryQuery.isError
+      ? 'error'
+      : 'ready';
   // Today's spotlight, resolved by the server exactly like /games/featured
   // does. `undefined` while in flight, the game id -- or null when the day
   // has no pick -- once the server answers; the failure flag keeps "nothing
   // is featured" distinct from "could not ask".
-  const [spotlightId, setSpotlightId] = useState<string | null | undefined>(undefined);
-  const [spotlightFailed, setSpotlightFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    getIndividualLeaderboard({ period: 'weekly', limit: 3 })
-      .then((board) => {
-        if (!cancelled) setTopPlayers(board.entries);
-      })
-      .catch(() => {
-        if (!cancelled) setTopPlayers([]);
-      });
-    getMyLeagueStanding('individual', { period: 'weekly' })
-      .then((mine) => {
-        if (!cancelled) setStanding(mine);
-      })
-      .catch(() => {
-        if (!cancelled) setStanding(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    getPlayerGameSummary()
-      .then((response) => {
-        if (cancelled) return;
-        setStats(response);
-        setStatsState('ready');
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setStats(null);
-        setStatsState('error');
-      });
-    getFeaturedToday()
-      .then((response) => {
-        if (!cancelled) setSpotlightId(response.game_id);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSpotlightId(null);
-        setSpotlightFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const spotlightId: string | null | undefined = featuredQuery.isPending
+    ? undefined
+    : featuredQuery.isError
+      ? null
+      : (featuredQuery.data?.game_id ?? null);
+  const spotlightFailed = featuredQuery.isError;
 
   const summary = standing?.entries[0] ?? null;
   // The administrator's configuration still gates the quick-access grid; the

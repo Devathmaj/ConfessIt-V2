@@ -39,6 +39,7 @@ const messaging = vi.hoisted(() => ({
     disconnect: vi.fn(),
     onMessage: vi.fn(),
     onError: vi.fn(),
+    onReconnect: vi.fn(() => () => {}),
   },
   sendMessage: vi.fn(),
   fetchMessages: vi.fn(),

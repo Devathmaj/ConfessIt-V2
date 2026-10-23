@@ -246,6 +246,10 @@ def refresh_access_token(
     elsewhere. A failed refresh also clears the cookie, so a dead token is not re-sent --
     except when the presented value is a stale copy of a live session's previous one,
     where the browser may still be holding the newer value (see ``_refresh_refusal``).
+
+    The successful body also carries the account the rotation just validated, in the
+    same shape as ``/auth/me``. That is what lets startup initialize the client without
+    a second account read; the refresh token remains cookie-only.
     """
     cookie_raw = request.cookies.get(settings.REFRESH_COOKIE_NAME)
     raw = cookie_raw
@@ -262,7 +266,13 @@ def refresh_access_token(
         # losing the cookie deletion this refusal owes the browser.
         return _refresh_refusal(request, exc, cookie_presented=using_cookie)
     response.set_cookie(value=result["refresh_token"], **_refresh_cookie_options(request))
-    return {"access_token": result["access_token"], "token_type": result["token_type"]}
+    return {
+        "access_token": result["access_token"],
+        "token_type": result["token_type"],
+        # Same shape as /auth/me, from the row this refresh just validated. The
+        # startup path can initialize the context without a second DB round trip.
+        "user": result["user"],
+    }
 
 
 @router.post("/logout")

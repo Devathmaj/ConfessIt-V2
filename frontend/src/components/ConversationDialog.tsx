@@ -6,7 +6,8 @@ import { Badge } from '@/components/ui/badge';
 import { Clock, MessageCircle, User, Heart, X, RefreshCw, ChevronDown, Loader2, Copy, Flag, ShieldOff, ShieldCheck, EyeOff, Eye, Info } from 'lucide-react';
 import { getCurrentConversation, acceptConversation, rejectConversation, blockConversation as blockConversationAPI, unblockConversation as unblockConversationAPI, getConversationByMatch } from '@/services/api';
 import { messagingClient, sendMessage, fetchMessages, reportMessage, SendMessageError } from '@/lib/messaging';
-import { MESSAGE_BODY_MAX } from '@/lib/limits';
+import { CHAT_IN_MEMORY_MESSAGE_MAX, MESSAGE_BODY_MAX } from '@/lib/limits';
+import { appendBounded, boundMessages } from '@/lib/boundedMessages';
 import {
   canSendAnotherMessage,
   emptyMessageQuota,
@@ -190,6 +191,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const messagesBackupRef = useRef<Message[]>([]); // Backup for messages during state changes
   const unsubscribeMessageRef = useRef<(() => void) | null>(null);
   const unsubscribeErrorRef = useRef<(() => void) | null>(null);
+  const unsubscribeReconnectRef = useRef<(() => void) | null>(null);
 
   /**
    * The conversation data the countdown reads.
@@ -249,7 +251,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       return false;
     }
     messageIdsRef.current.add(message.id);
-    setMessages((previous) => [...previous, message]);
+    // The live window is bounded: a tab left open all evening keeps the newest
+    // rows and nothing older than the conversation's own ceiling.
+    setMessages((previous) => appendBounded(previous, message, CHAT_IN_MEMORY_MESSAGE_MAX));
     setTotalMessages((previous) => previous + 1);
     return true;
   };
@@ -383,6 +387,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       unsubscribeErrorRef.current();
       unsubscribeErrorRef.current = null;
     }
+    if (unsubscribeReconnectRef.current) {
+      unsubscribeReconnectRef.current();
+      unsubscribeReconnectRef.current = null;
+    }
     messagingClient.disconnect();
     // The live stream is gone, so this conversation may be opened again -- after
     // an unblock, for instance, when the thread becomes live again.
@@ -478,6 +486,16 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         });
         unsubscribeErrorRef.current = unsubscribeError;
 
+        // A reconnect means the socket was down while messages were published.
+        // Re-read the newest authoritative page; the live stream does not replay
+        // what it missed, and chat is never persisted to make up the gap.
+        unsubscribeReconnectRef.current = messagingClient.onReconnect(() => {
+          setIsConnected(true);
+          void loadMessagesFromBackend().catch(() => {
+            // The loader's toast already explains a failed recovery.
+          });
+        });
+
         console.log('✅ Setting isConnected to true');
         setIsConnected(true);
       } else {
@@ -525,7 +543,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // The list is replaced, so the known ids are replaced with it -- in the
       // same breath, before the render that would otherwise catch up later.
       rememberMessageIds(messagesWithFlags);
-      setMessages(messagesWithFlags);
+      setMessages(boundMessages(messagesWithFlags, CHAT_IN_MEMORY_MESSAGE_MAX));
       // A numeric total means the server pages: the window above is the newest page and
       // older ones wait behind the pager. Without one the whole thread came back, as it
       // always did before paging existed.
@@ -581,7 +599,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       flagged.forEach((message) => messageIdsRef.current.add(message.id));
       setMessages((prev) => {
         const known = new Set(prev.map((message) => message.id));
-        return [...flagged.filter((message) => !known.has(message.id)), ...prev];
+        return boundMessages(
+          [...flagged.filter((message) => !known.has(message.id)), ...prev],
+          CHAT_IN_MEMORY_MESSAGE_MAX,
+        );
       });
       if (typeof fetchedTotal === 'number') setTotalMessages(fetchedTotal);
     } catch (error) {
@@ -949,8 +970,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             console.log('🔄 Restoring messages after state update:', savedMessages.length);
             // The list is replaced, so the known ids are replaced with it.
             rememberMessageIds(savedMessages);
-            setMessages(savedMessages);
-            messagesBackupRef.current = savedMessages;
+            const bounded = boundMessages(savedMessages, CHAT_IN_MEMORY_MESSAGE_MAX);
+            setMessages(bounded);
+            messagesBackupRef.current = bounded;
           } else {
             // If there were no messages, try to load them
             console.log('📥 No saved messages, loading from backend...');
@@ -961,7 +983,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                   is_sender: msg.sender_regno === currentUserRef.current
                 }));
                 rememberMessageIds(messagesWithFlags);
-                setMessages(messagesWithFlags);
+                setMessages(boundMessages(messagesWithFlags, CHAT_IN_MEMORY_MESSAGE_MAX));
                 setTotalMessages(
                   typeof fetchedTotal === 'number' ? fetchedTotal : messagesWithFlags.length,
                 );

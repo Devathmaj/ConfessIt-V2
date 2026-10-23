@@ -170,7 +170,7 @@ describe('GamesDashboardPage: the weekly challenge', () => {
     expect(
       await screen.findByText('Play 3 different games this week'),
     ).toBeInTheDocument();
-    expect(screen.getByText('2 of 3 games')).toBeInTheDocument();
+    expect(await screen.findByText('2 of 3 games')).toBeInTheDocument();
     expect(screen.getByText('1 to go')).toBeInTheDocument();
   });
 
@@ -200,7 +200,7 @@ describe('GamesDashboardPage: today\'s featured', () => {
     const spotlight = (await screen.findByText('Today\'s featured')).closest(
       '[data-slot="card"]',
     ) as HTMLElement;
-    expect(within(spotlight).getByText('Trivia Drop')).toBeInTheDocument();
+    expect(await within(spotlight).findByText('Trivia Drop')).toBeInTheDocument();
     expect(within(spotlight).getByRole('link', { name: /view featured/i })).toHaveAttribute(
       'href',
       '/games/featured',

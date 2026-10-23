@@ -199,6 +199,33 @@ def test_refresh_returns_a_fresh_access_token_and_rotates_the_cookie(db, no_auth
     assert browser.get("/auth/me", headers=_bearer(new_access)).status_code == 200
 
 
+def test_refresh_returns_the_same_account_payload_as_me(db, no_auth_override):
+    """Boot can initialize from the rotation without a second account read.
+
+    The payload must be exactly the /auth/me shape (participant fields included),
+    never the refresh token, and still uncacheable.
+    """
+    _seed_user(db, "refresh-account-user")
+    browser = _browser()
+    access_token = _redeem_token(browser, _mint_token_for(db, "refresh-account-user"))
+
+    me = browser.get("/auth/me", headers=_bearer(access_token))
+    assert me.status_code == 200, me.text
+
+    refreshed = browser.post(REFRESH_ENDPOINT)
+    assert refreshed.status_code == 200, refreshed.text
+    body = refreshed.json()
+
+    assert body["user"] == me.json()
+    assert body["user"]["regno"] == "refresh-account-user"
+    assert body["user"]["gender"] == "other"
+    assert "refresh_token" not in body
+    assert refreshed.headers.get("cache-control") == "no-store"
+
+    # The token in the body is the rotated access token and still works.
+    assert browser.get("/auth/me", headers=_bearer(body["access_token"])).status_code == 200
+
+
 def test_the_rotated_away_refresh_token_stops_working(db, no_auth_override):
     _seed_user(db, "old-token-user")
     browser = _browser()

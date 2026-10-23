@@ -36,6 +36,7 @@ vi.mock('axios', async () => {
 
 import axios from 'axios';
 import { clearInMemoryToken, getCurrentUser, handleResponseError, refreshAccessToken, serverLogout, setInMemoryToken, getInMemoryToken } from '@/services/api';
+import { refreshSession } from '@/lib/sessionRefresh';
 import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '@/lib/authEvents';
 
 const mockedAxios = vi.mocked(axios);
@@ -264,6 +265,19 @@ describe('handleResponseError (access-token refresh)', () => {
 
     expect(mockedAxios.post).not.toHaveBeenCalled();
     expect(getInMemoryToken()).toBe('valid-token');
+  });
+
+  it('refreshSession exposes the account payload while token-only callers keep working', async () => {
+    mockedAxios.post.mockResolvedValue({
+      data: { access_token: 'fresh-access', user: { id: 'u1', regno: 'U1' } },
+    } as never);
+
+    await expect(refreshSession()).resolves.toEqual({
+      accessToken: 'fresh-access',
+      user: { id: 'u1', regno: 'U1' },
+    });
+    expect(getInMemoryToken()).toBe('fresh-access');
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
   });
 
   it('refreshAccessToken answers null when the refresh is refused', async () => {

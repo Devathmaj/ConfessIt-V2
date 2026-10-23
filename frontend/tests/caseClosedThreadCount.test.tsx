@@ -29,6 +29,7 @@ const messaging = vi.hoisted(() => ({
     disconnect: vi.fn(),
     onMessage: vi.fn((_callback: (message: Record<string, unknown>) => void) => () => {}),
     onError: vi.fn(() => () => {}),
+    onReconnect: vi.fn(() => () => {}),
   },
   /** The callbacks the dialog registered, so a test can deliver a live turn. */
   messageCallbacks: [] as ((message: Record<string, unknown>) => void)[],

@@ -989,10 +989,10 @@ def _record_refresh_replay(db: Database, session_id: str, holder_regno: Optional
         logger.warning(f"Replay notice failed for session {session_id}: {exc}")
 
 
-def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]:
+def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, Any]:
     """Rotate a refresh token and mint a fresh access token for its session.
 
-    One conditional UPDATE keyed on the incoming hash makes rotation single-use. A rotated-away value is refused and logged as replay, but the session is *not* revoked: the old value can never succeed again and killing the live token would punish a benign racing tab. Replay bookkeeping runs after the transaction closes; authority is re-read so revocation or a block applies now.
+    One conditional UPDATE keyed on the incoming hash makes rotation single-use. A rotated-away value is refused and logged as replay, but the session is *not* revoked: the old value can never succeed again and killing the live token would punish a benign racing tab. Replay bookkeeping runs after the transaction closes; authority is re-read so revocation or a block applies now. The result also carries the validated account model, so the boot path can initialize without a second ``/auth/me`` read.
     """
     if not raw_token:
         raise credentials_exception()
@@ -1134,6 +1134,12 @@ def rotate_refresh_token_service(raw_token: str, db: Database) -> Dict[str, str]
         "access_token": new_access_token,
         "token_type": "bearer",
         "refresh_token": new_raw,
+        # The refresh already resolved and validated this account, so boot can
+        # initialize AuthContext without a second /auth/me round trip. This is the
+        # same model /auth/me returns: present the row, never privileges from the JWT.
+        "user": account_from_row(
+            normalize_account_type(account_type), account
+        ).model_dump(mode="json", by_alias=True),
     }
 
 

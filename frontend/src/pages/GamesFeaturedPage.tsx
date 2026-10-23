@@ -8,6 +8,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { GamesPageHeader } from '@/components/games/GamesPageHeader';
 import { useGamesConfig } from '@/contexts/GamesConfigContext';
 import { gameTypeLabel, getGameById, type GameDefinition } from '@/lib/gamesCatalog';
+import { CACHE_TIMES, queryKeys } from '@/lib/queryClient';
+import { useApiQuery } from '@/lib/useApiQuery';
 import { getFeaturedToday } from '@/services/api';
 
 /**
@@ -58,25 +60,17 @@ export const GamesFeaturedPage = () => {
   // plus a separate failure flag so "server said nothing" stays distinct from
   // "request failed" (offline standalone mode falls back to local config).
   const { featured } = useGamesConfig();
-  const [serverGameId, setServerGameId] = useState<string | null | undefined>(undefined);
-  const [loadFailed, setLoadFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    getFeaturedToday()
-      .then((response) => {
-        if (!cancelled) setServerGameId(response.game_id);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setServerGameId(null);
-          setLoadFailed(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const featuredQuery = useApiQuery({
+    queryKey: queryKeys.games.featured(),
+    queryFn: getFeaturedToday,
+    staleTime: CACHE_TIMES.gameConfig,
+  });
+  const serverGameId: string | null | undefined = featuredQuery.isPending
+    ? undefined
+    : featuredQuery.isError
+      ? null
+      : (featuredQuery.data?.game_id ?? null);
+  const loadFailed = featuredQuery.isError;
 
   // While the spotlight is loading, render a skeleton -- never the local
   // fallback game. Rendering `featured?.game` here flashed a (usually wrong)

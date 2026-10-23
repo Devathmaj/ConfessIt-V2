@@ -9,6 +9,18 @@ import axios from 'axios';
 import { API_URL } from '@/lib/apiBase';
 import { SESSION_REQUEST_TIMEOUT_MS } from '@/lib/apiTimeouts';
 import { getAccessToken } from '@/lib/tokenStore';
+import { clearProfilePictureCache } from '@/lib/cacheControl';
+import {
+  CACHE_TIMES,
+  cachedQuery,
+  invalidateChatQueries,
+  invalidateConfessionQueries,
+  invalidateGameConfigQueries,
+  invalidateGameStateQueries,
+  invalidateLeaderboardQueries,
+  invalidateProfileQueries,
+  queryKeys,
+} from '@/lib/queryClient';
 import type { AccountType } from '@/lib/capabilities';
 import type { Cohort, UserGender, UserYear } from '@/lib/accountFields';
 
@@ -86,53 +98,63 @@ export interface ConfessionCommentsPage {
  * more" beneath it reads. Accepts both the new `{comments, total, skip, limit}`
  * envelope and a legacy bare array, normalising the latter to a single page.
  */
-export const getConfessionComments = async (
+export const getConfessionComments = (
   confessionId: string,
   params?: { skip?: number; limit?: number; sort?: 'latest' | 'relevant' },
-): Promise<ConfessionCommentsPage> => {
-  const response = await axios.get(`${API_URL}/confessions/${confessionId}/comments`, {
-    headers: getAuthHeaders(),
-    params: {
-      ...(params?.skip !== undefined ? { skip: params.skip } : {}),
-      ...(params?.limit !== undefined ? { limit: params.limit } : {}),
-      ...(params?.sort ? { sort: params.sort } : {}),
+): Promise<ConfessionCommentsPage> =>
+  cachedQuery({
+    queryKey: queryKeys.confessions.comments(confessionId, params),
+    staleTime: CACHE_TIMES.confessions,
+    queryFn: async () => {
+      const response = await axios.get(`${API_URL}/confessions/${confessionId}/comments`, {
+        headers: getAuthHeaders(),
+        params: {
+          ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+          ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+          ...(params?.sort ? { sort: params.sort } : {}),
+        },
+      });
+      const data = response.data;
+      if (Array.isArray(data)) {
+        return { comments: data, total: data.length, skip: 0, limit: data.length };
+      }
+      return {
+        comments: data?.comments ?? [],
+        total: data?.total ?? (data?.comments?.length ?? 0),
+        skip: data?.skip ?? 0,
+        limit: data?.limit ?? (data?.comments?.length ?? 0),
+      };
     },
   });
-  const data = response.data;
-  if (Array.isArray(data)) {
-    return { comments: data, total: data.length, skip: 0, limit: data.length };
-  }
-  return {
-    comments: data?.comments ?? [],
-    total: data?.total ?? (data?.comments?.length ?? 0),
-    skip: data?.skip ?? 0,
-    limit: data?.limit ?? (data?.comments?.length ?? 0),
-  };
-};
 
-export const getConfessions = async (
+export const getConfessions = (
   sortBy = 'time',
   params?: { skip?: number; limit?: number },
-): Promise<ConfessionsPage> => {
-  const response = await axios.get(`${API_URL}/confessions`, {
-    headers: getAuthHeaders(),
-    params: {
-      sort_by: sortBy,
-      ...(params?.skip !== undefined ? { skip: params.skip } : {}),
-      ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+): Promise<ConfessionsPage> =>
+  cachedQuery({
+    queryKey: queryKeys.confessions.feed(sortBy, params),
+    staleTime: CACHE_TIMES.confessions,
+    queryFn: async () => {
+      const response = await axios.get(`${API_URL}/confessions`, {
+        headers: getAuthHeaders(),
+        params: {
+          sort_by: sortBy,
+          ...(params?.skip !== undefined ? { skip: params.skip } : {}),
+          ...(params?.limit !== undefined ? { limit: params.limit } : {}),
+        },
+      });
+      const data = response.data;
+      if (Array.isArray(data)) {
+        return { confessions: data, total: data.length, skip: 0, limit: data.length };
+      }
+      return {
+        confessions: data?.confessions ?? [],
+        total: data?.total ?? (data?.confessions?.length ?? 0),
+        skip: data?.skip ?? 0,
+        limit: data?.limit ?? (data?.confessions?.length ?? 0),
+      };
     },
   });
-  const data = response.data;
-  if (Array.isArray(data)) {
-    return { confessions: data, total: data.length, skip: 0, limit: data.length };
-  }
-  return {
-    confessions: data?.confessions ?? [],
-    total: data?.total ?? (data?.confessions?.length ?? 0),
-    skip: data?.skip ?? 0,
-    limit: data?.limit ?? (data?.confessions?.length ?? 0),
-  };
-};
 
 export const getTotalConfessionsCount = async () => {
     const response = await axios.get(`${API_URL}/confessions/total_count`, { headers: getAuthHeaders() });
@@ -160,6 +182,10 @@ export const getConfessionCooldown = async () => {
 
 export const createConfession = async (confession: any) => {
   const response = await axios.post(`${API_URL}/confessions`, confession, { headers: getAuthHeaders() });
+  // A new post changes the head of every feed order. The first page is re-read
+  // by the screen; marking the cache stale is what makes that re-read actually
+  // reach the server rather than serve the pre-write page.
+  await invalidateConfessionQueries();
   return response.data;
 };
 
@@ -242,6 +268,7 @@ export const updateConfession = async (confessionId: string, updateData: { anony
       updateData,
       { headers: getAuthHeaders() }
     );
+    await invalidateConfessionQueries(confessionId);
     return response.data;
 };
 
@@ -251,6 +278,7 @@ export const reactToConfession = async (confessionId: string, reaction: string) 
     { reaction: reaction },
     { headers: getAuthHeaders() }
   );
+  await invalidateConfessionQueries(confessionId);
   return response.data;
 };
 
@@ -260,6 +288,7 @@ export const reportConfession = async (confessionId: string, reason: string) => 
         { reason },
         { headers: getAuthHeaders() }
     );
+    await invalidateConfessionQueries(confessionId);
     return response.data;
 };
 
@@ -271,6 +300,7 @@ export const createComment = async (confessionId: string, body: string) => {
     { body },
     { headers: getAuthHeaders() }
   );
+  await invalidateConfessionQueries(confessionId);
   return response.data;
 };
 
@@ -280,6 +310,7 @@ export const likeComment = async (commentId: string) => {
     {},
     { headers: getAuthHeaders() }
   );
+  await invalidateConfessionQueries();
   return response.data;
 };
 
@@ -289,6 +320,7 @@ export const dislikeComment = async (commentId: string) => {
     {},
     { headers: getAuthHeaders() }
   );
+  await invalidateConfessionQueries();
   return response.data;
 };
 
@@ -298,31 +330,38 @@ export const reportComment = async (commentId: string, reason: string) => {
         { reason },
         { headers: getAuthHeaders() }
     );
+    await invalidateConfessionQueries();
     return response.data;
 };
 
 // --- User & Auth Endpoints ---
 
-export const getCurrentUser = async (token?: string) => {
-  const headers = token
-    ? { Authorization: `Bearer ${token}` }
-    : getAuthHeaders();
+export const getCurrentUser = (token?: string) =>
+  cachedQuery({
+    queryKey: queryKeys.profiles.me(),
+    staleTime: CACHE_TIMES.profiles,
+    queryFn: async () => {
+      const headers = token
+        ? { Authorization: `Bearer ${token}` }
+        : getAuthHeaders();
 
-  const response = await axios.get(`${API_URL}/auth/me`, {
-    headers,
-    // The same budget the refresh gets, and for the same reason: this read is
-    // what the boot sequence waits on, and a backend that stops answering must
-    // not hold the whole app on its splash screen. Without a budget axios waits
-    // for ever, and there is no way out but a reload.
-    signal: AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS),
+      const response = await axios.get(`${API_URL}/auth/me`, {
+        headers,
+        // The same budget the refresh gets, and for the same reason: this read is
+        // what the boot sequence waits on, and a backend that stops answering must
+        // not hold the whole app on its splash screen. Without a budget axios waits
+        // for ever, and there is no way out but a reload.
+        signal: AbortSignal.timeout(SESSION_REQUEST_TIMEOUT_MS),
+      });
+      return response.data;
+    },
   });
-  return response.data;
-};
 
 export const updateUserProfile = async (profileData: any) => {
     const response = await axios.put(`${API_URL}/profile/update`, profileData, {
         headers: getAuthHeaders(),
     });
+    await invalidateProfileQueries();
     return response.data;
 };
 
@@ -338,6 +377,10 @@ export const uploadProfilePicture = async (file: File) => {
             ...getAuthHeaders(),
         },
     });
+    await invalidateProfileQueries();
+    // The worker holds the previous bytes for up to 20 minutes; a replacement
+    // picture must not wait for that TTL.
+    void clearProfilePictureCache();
     return response.data;
 };
 
@@ -378,6 +421,7 @@ export const acceptConversation = async (match_id: string) => {
     const response = await axios.post(`${API_URL}/conversations/${match_id}/accept`, {}, {
         headers: getAuthHeaders(),
     });
+    await invalidateChatQueries();
     return response.data;
 };
 
@@ -385,6 +429,7 @@ export const rejectConversation = async (match_id: string) => {
     const response = await axios.post(`${API_URL}/conversations/${match_id}/reject`, {}, {
         headers: getAuthHeaders(),
     });
+    await invalidateChatQueries();
     return response.data;
 };
 
@@ -392,6 +437,7 @@ export const sendMessage = async (conversation_id: string, body: string) => {
     const response = await axios.post(`${API_URL}/messages/send`, { conversation_id, body }, {
         headers: getAuthHeaders(),
     });
+    await invalidateChatQueries(conversation_id);
     return response.data;
 };
 
@@ -427,6 +473,7 @@ export const blockConversation = async (match_id: string) => {
     const response = await axios.post(`${API_URL}/conversations/${match_id}/block`, {}, {
         headers: getAuthHeaders(),
     });
+    await invalidateChatQueries();
     return response.data;
 };
 
@@ -434,6 +481,7 @@ export const unblockConversation = async (match_id: string) => {
     const response = await axios.post(`${API_URL}/conversations/${match_id}/unblock`, {}, {
         headers: getAuthHeaders(),
     });
+    await invalidateChatQueries();
     return response.data;
 };
 
@@ -679,6 +727,7 @@ export const getAdminConfessions = async (params?: AdminConfessionsQuery): Promi
 
 export const deleteAdminConfession = async (confessionId: string) => {
     const response = await axios.delete(`${API_URL}/admin/confessions/${confessionId}`, { headers: getAuthHeaders() });
+    await invalidateConfessionQueries(confessionId);
     return response.data;
 };
 
@@ -696,6 +745,7 @@ export const hideAdminConfession = async (confessionId: string) => {
         {},
         { headers: getAuthHeaders() }
     );
+    await invalidateConfessionQueries(confessionId);
     return response.data;
 };
 
@@ -714,6 +764,7 @@ export const hideAdminComment = async (commentId: string) => {
         {},
         { headers: getAuthHeaders() }
     );
+    await invalidateConfessionQueries(response.data?.confession_id);
     return response.data;
 };
 
@@ -728,6 +779,7 @@ export const unhideAdminConfession = async (confessionId: string) => {
         {},
         { headers: getAuthHeaders() }
     );
+    await invalidateConfessionQueries(confessionId);
     return response.data;
 };
 
@@ -737,6 +789,7 @@ export const unhideAdminComment = async (commentId: string) => {
         {},
         { headers: getAuthHeaders() }
     );
+    await invalidateConfessionQueries(response.data?.confession_id);
     return response.data;
 };
 
@@ -757,6 +810,7 @@ export const unhideAdminMessage = async (
         {},
         { headers: getAuthHeaders(), params: { kind } }
     );
+    await invalidateChatQueries();
     return response.data;
 };
 
@@ -935,6 +989,9 @@ export const updateAdminConfessionReportStatus = async (
         {},
         { headers: getAuthHeaders(), params: { status } }
     );
+    // A report resolution only changes public content when it removes it; a
+    // dismissal must not churn every feed.
+    if (response.data?.content_removed) await invalidateConfessionQueries();
     return response.data;
 };
 
@@ -956,6 +1013,7 @@ export const updateAdminMessageReportStatus = async (
         {},
         { headers: getAuthHeaders(), params: { status, kind } }
     );
+    if (response.data?.content_removed) await invalidateChatQueries();
     return response.data;
 };
 
@@ -1187,6 +1245,7 @@ export const createWordleGame = async (payload: WordleGamePayload): Promise<Word
     const response = await axios.post(`${API_URL}/admin/wordle`, payload, {
         headers: getAuthHeaders(),
     });
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -1308,6 +1367,7 @@ export const createAnagramGame = async (payload: AnagramGamePayload): Promise<An
     const response = await axios.post(`${API_URL}/admin/anagram`, payload, {
         headers: getAuthHeaders(),
     });
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -1368,6 +1428,7 @@ export const createCoupleGame = async (payload: CoupleGamePayload): Promise<Coup
     const response = await axios.post(`${API_URL}/admin/couple`, payload, {
         headers: getAuthHeaders(),
     });
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -1459,6 +1520,7 @@ export const submitWordleGuess = async (
         { game_id: gameId, guess },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('wordle');
     return response.data;
 };
 
@@ -1597,6 +1659,7 @@ export const submitAnagramGuess = async (
         { game_id: gameId, guess },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('anagram');
     return response.data;
 };
 
@@ -1796,6 +1859,7 @@ export const selectCouplePartner = async (
         { selected_user_id: selectedUserId },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('couple-questionnaire');
     return response.data;
 };
 
@@ -1809,6 +1873,7 @@ export const submitCoupleAnswer = async (
         { session_question_id: sessionQuestionId, selected_option_index: selectedOptionIndex },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('couple-questionnaire');
     return response.data;
 };
 
@@ -1822,6 +1887,7 @@ export const submitCouplePrediction = async (
         { session_question_id: sessionQuestionId, predicted_option_index: predictedOptionIndex },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('couple-questionnaire');
     return response.data;
 };
 
@@ -1914,6 +1980,7 @@ export const selectPlotTwistPartner = async (
     { selected_user_id: selectedUserId },
     { headers: getAuthHeaders() }
   );
+  await invalidateGameStateQueries('plot-twist');
   return response.data;
 };
 
@@ -1924,6 +1991,7 @@ export const startPlotTwistEvent = async (): Promise<PlotTwistState> => {
     {},
     { headers: getAuthHeaders() }
   );
+  await invalidateGameStateQueries('plot-twist');
   return response.data;
 };
 
@@ -1937,6 +2005,7 @@ export const submitPlotTwistChoice = async (
     { choice_id: choiceId, state_version: stateVersion },
     { headers: getAuthHeaders() }
   );
+  await invalidateGameStateQueries('plot-twist');
   return response.data;
 };
 
@@ -2101,6 +2170,8 @@ export const publishPlotTwistPackage = async (
     {},
     { headers: getAuthHeaders() }
   );
+  await invalidateGameConfigQueries();
+  await invalidateGameStateQueries('plot-twist');
   return response.data;
 };
 
@@ -2317,6 +2388,8 @@ export const revokePlotTwistSession = async (): Promise<AiSessionRevocation> => 
     {},
     { headers: getAuthHeaders() }
   );
+  await invalidateGameConfigQueries();
+  await invalidateGameStateQueries('plot-twist');
   return response.data;
 };
 
@@ -2425,11 +2498,13 @@ export const selectCaseClosedPartner = async (selectedUserId: string): Promise<C
     { selected_user_id: selectedUserId },
     { headers: getAuthHeaders() }
   );
+  await invalidateGameStateQueries('case-closed');
   return response.data;
 };
 
 export const startCaseClosedEvent = async (): Promise<CaseClosedState> => {
   const response = await axios.post(`${API_URL}/games/case-closed/start`, {}, { headers: getAuthHeaders() });
+  await invalidateGameStateQueries('case-closed');
   return response.data;
 };
 
@@ -2442,6 +2517,7 @@ export const investigateCaseClosedLead = async (
     { lead_id: leadId, state_version: stateVersion },
     { headers: getAuthHeaders() }
   );
+  await invalidateGameStateQueries('case-closed');
   return response.data;
 };
 
@@ -2451,6 +2527,7 @@ export const proposeCaseClosedAccusation = async (suspectId: string): Promise<Ca
     { suspect_id: suspectId },
     { headers: getAuthHeaders() }
   );
+  await invalidateGameStateQueries('case-closed');
   return response.data;
 };
 
@@ -2460,6 +2537,7 @@ export const confirmCaseClosedAccusation = async (suspectId: string): Promise<Ca
     { suspect_id: suspectId },
     { headers: getAuthHeaders() }
   );
+  await invalidateGameStateQueries('case-closed');
   return response.data;
 };
 
@@ -2530,6 +2608,8 @@ export const getCaseClosedPackages = async (blueprintId?: string): Promise<CaseC
 
 export const publishCaseClosedPackage = async (packageId: string): Promise<CaseClosedPackage> => {
   const response = await axios.post(`${API_URL}/admin/case-closed/packages/${packageId}/publish`, {}, { headers: getAuthHeaders() });
+  await invalidateGameConfigQueries();
+  await invalidateGameStateQueries('case-closed');
   return response.data;
 };
 
@@ -2563,6 +2643,8 @@ export const revokeCaseClosedSession = async (): Promise<AiSessionRevocation> =>
     {},
     { headers: getAuthHeaders() }
   );
+  await invalidateGameConfigQueries();
+  await invalidateGameStateQueries('case-closed');
   return response.data;
 };
 
@@ -2685,12 +2767,17 @@ export interface GameConfig {
 }
 
 /** Every game's configuration. */
-export const getGameConfigs = async (): Promise<GameConfig[]> => {
-    const response = await axios.get(`${API_URL}/admin/games/config`, {
-        headers: getAuthHeaders(),
+export const getGameConfigs = (): Promise<GameConfig[]> =>
+    cachedQuery({
+        queryKey: queryKeys.games.config(),
+        staleTime: CACHE_TIMES.gameConfig,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/admin/games/config`, {
+                headers: getAuthHeaders(),
+            });
+            return response.data;
+        },
     });
-    return response.data;
-};
 
 /** Patch one game's availability, content mode, reset cadence, grid size or difficulty. */
 export const updateGameConfig = async (
@@ -2705,6 +2792,8 @@ export const updateGameConfig = async (
     const response = await axios.put(`${API_URL}/admin/games/config/${gameId}`, payload, {
         headers: getAuthHeaders(),
     });
+    // Configuration is the source of the player-facing selection and spotlight.
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -2752,12 +2841,17 @@ export interface FeaturedGame {
 }
 
 /** Every featured date, newest day first. */
-export const getFeaturedGames = async (): Promise<FeaturedGame[]> => {
-    const response = await axios.get(`${API_URL}/admin/featured`, {
-        headers: getAuthHeaders(),
+export const getFeaturedGames = (): Promise<FeaturedGame[]> =>
+    cachedQuery({
+        queryKey: queryKeys.games.adminFeatured(),
+        staleTime: CACHE_TIMES.gameConfig,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/admin/featured`, {
+                headers: getAuthHeaders(),
+            });
+            return response.data;
+        },
     });
-    return response.data;
-};
 
 /** Pin one game as featured for one UTC date. A date that already has one answers 409. */
 export const setFeaturedGame = async (
@@ -2769,6 +2863,7 @@ export const setFeaturedGame = async (
         { game_date: gameDate, game_id: gameId },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -2790,6 +2885,7 @@ export const replaceFeaturedGame = async (
         { game_date: gameDate, game_id: gameId },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -2798,6 +2894,7 @@ export const clearFeaturedGame = async (gameDate: string): Promise<void> => {
     await axios.delete(`${API_URL}/admin/featured/${gameDate}`, {
         headers: getAuthHeaders(),
     });
+    await invalidateGameConfigQueries();
 };
 
 /**
@@ -2817,6 +2914,7 @@ export const setFeaturedRange = async (
         { game_id: gameId, start_date: startDate, end_date: endDate },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -2837,6 +2935,7 @@ export const replaceFeaturedRange = async (
         { game_id: gameId, start_date: startDate, end_date: endDate },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -2850,6 +2949,10 @@ export const runScheduledResets = async (): Promise<{
         {},
         { headers: getAuthHeaders() }
     );
+    // A reset opens new sessions and closes the previous ones: selection,
+    // spotlight, player summaries and boards can all have moved.
+    await invalidateGameConfigQueries();
+    await invalidateGameStateQueries();
     return response.data;
 };
 
@@ -2967,24 +3070,34 @@ export interface GameSelectResponse {
 }
 
 /** Every discoverable game with its playability. */
-export const getGameSelection = async (): Promise<GameSelectResponse> => {
-    const response = await axios.get(`${API_URL}/games/select`, {
-        headers: getAuthHeaders(),
+export const getGameSelection = (): Promise<GameSelectResponse> =>
+    cachedQuery({
+        queryKey: queryKeys.games.selection(),
+        staleTime: CACHE_TIMES.gameConfig,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/games/select`, {
+                headers: getAuthHeaders(),
+            });
+            return response.data;
+        },
     });
-    return response.data;
-};
 
 /** Today's featured game (UTC), if the day has a pick. */
-export const getFeaturedToday = async (): Promise<{
+export const getFeaturedToday = (): Promise<{
     game_id: string | null;
     game_date: string | null;
     server_date: string;
-}> => {
-    const response = await axios.get(`${API_URL}/games/featured`, {
-        headers: getAuthHeaders(),
+}> =>
+    cachedQuery({
+        queryKey: queryKeys.games.featured(),
+        staleTime: CACHE_TIMES.gameConfig,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/games/featured`, {
+                headers: getAuthHeaders(),
+            });
+            return response.data;
+        },
     });
-    return response.data;
-};
 
 /** One finished round in the caller's own history, newest first. */
 export interface PlayerRecentPlay {
@@ -3012,12 +3125,17 @@ export interface PlayerGameSummary {
  * round played today is in this list immediately -- unlike league awards,
  * which are issued only when an event finalizes.
  */
-export const getPlayerGameSummary = async (): Promise<PlayerGameSummary> => {
-    const response = await axios.get(`${API_URL}/games/summary`, {
-        headers: getAuthHeaders(),
+export const getPlayerGameSummary = (): Promise<PlayerGameSummary> =>
+    cachedQuery({
+        queryKey: queryKeys.games.summary(),
+        staleTime: CACHE_TIMES.leaderboards,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/games/summary`, {
+                headers: getAuthHeaders(),
+            });
+            return response.data;
+        },
     });
-    return response.data;
-};
 
 // --- Reaction Time Configuration Endpoints ---
 
@@ -3053,6 +3171,7 @@ export const createReactionTimeGame = async (
     const response = await axios.post(`${API_URL}/admin/reaction-time`, payload, {
         headers: getAuthHeaders(),
     });
+    await invalidateGameConfigQueries();
     return response.data;
 };
 
@@ -3139,6 +3258,7 @@ export const submitConnections = async (
         { game_id: gameId, groups },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('connections');
     return response.data;
 };
 
@@ -3181,6 +3301,8 @@ export const createConnectionsGame = async (
     const response = await axios.post(`${API_URL}/admin/connections`, payload, {
         headers: getAuthHeaders(),
     });
+    await invalidateGameConfigQueries();
+    await invalidateGameStateQueries('connections');
     return response.data;
 };
 
@@ -3324,6 +3446,7 @@ export const submitTriviaAnswer = async (
         { question_id: questionId, selected_indexes: selectedIndexes },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('trivia-drop');
     return response.data;
 };
 
@@ -3417,6 +3540,10 @@ export const createTriviaQuestion = async (
     const response = await axios.post(`${API_URL}/admin/trivia-drop`, payload, {
         headers: getAuthHeaders(),
     });
+    if (payload.release_mode === 'now') {
+        await invalidateGameConfigQueries();
+        await invalidateGameStateQueries('trivia-drop');
+    }
     return response.data;
 };
 
@@ -3470,6 +3597,8 @@ export const deployTriviaQuestion = async (questionId: string): Promise<TriviaQu
         {},
         { headers: getAuthHeaders() }
     );
+    await invalidateGameConfigQueries();
+    await invalidateGameStateQueries('trivia-drop');
     return response.data;
 };
 
@@ -3506,6 +3635,8 @@ export const cancelTriviaQuestion = async (questionId: string): Promise<TriviaQu
         {},
         { headers: getAuthHeaders() }
     );
+    await invalidateGameConfigQueries();
+    await invalidateGameStateQueries('trivia-drop');
     return response.data;
 };
 
@@ -3576,6 +3707,7 @@ export const startReactionTimeAttempt = async (
         { game_id: gameId },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('reaction-time');
     return response.data;
 };
 
@@ -3597,6 +3729,7 @@ export const completeReactionTimeAttempt = async (payload: {
         payload,
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('reaction-time');
     return response.data;
 };
 
@@ -3712,6 +3845,7 @@ export const selectTwoKeyEscapePartner = async (
         { selected_user_id: selectedUserId },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('two-key-escape');
     return response.data;
 };
 
@@ -3728,6 +3862,7 @@ export const submitTwoKeyEscapeRole = async (
         { role },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('two-key-escape');
     return response.data;
 };
 
@@ -3743,6 +3878,7 @@ export const changeTwoKeyEscapeRole = async (
         { role },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('two-key-escape');
     return response.data;
 };
 
@@ -3755,6 +3891,7 @@ export const moveTwoKeyEscape = async (
         { direction },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('two-key-escape');
     return response.data;
 };
 
@@ -3770,6 +3907,7 @@ export const spendTwoKeyEscapeKey = async (
         { key_index: keyIndex },
         { headers: getAuthHeaders() }
     );
+    await invalidateGameStateQueries('two-key-escape');
     return response.data;
 };
 
@@ -3865,57 +4003,81 @@ const leagueParams = (query: LeagueBoardQuery): Record<string, string | number> 
 };
 
 /** Ranked individual standings: global, or one individual game's board. */
-export const getIndividualLeaderboard = async (
+export const getIndividualLeaderboard = (
     query: LeagueBoardQuery = {}
-): Promise<LeagueIndividualBoard> => {
-    const response = await axios.get(`${API_URL}/leaderboards/individual`, {
-        headers: getAuthHeaders(),
-        params: leagueParams(query),
+): Promise<LeagueIndividualBoard> =>
+    cachedQuery({
+        queryKey: queryKeys.leaderboards.board('individual', query),
+        staleTime: CACHE_TIMES.leaderboards,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/leaderboards/individual`, {
+                headers: getAuthHeaders(),
+                params: leagueParams(query),
+            });
+            return response.data;
+        },
     });
-    return response.data;
-};
 
 /** Ranked couple standings: global, or one couple game's board. */
-export const getCouplesLeaderboard = async (
+export const getCouplesLeaderboard = (
     query: LeagueBoardQuery = {}
-): Promise<LeagueCoupleBoard> => {
-    const response = await axios.get(`${API_URL}/leaderboards/couples`, {
-        headers: getAuthHeaders(),
-        params: leagueParams(query),
+): Promise<LeagueCoupleBoard> =>
+    cachedQuery({
+        queryKey: queryKeys.leaderboards.board('couple', query),
+        staleTime: CACHE_TIMES.leaderboards,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/leaderboards/couples`, {
+                headers: getAuthHeaders(),
+                params: leagueParams(query),
+            });
+            return response.data;
+        },
     });
-    return response.data;
-};
 
 /** One game's normalized leaderboard for one period and subject type. */
-export const getGameLeaderboard = async (
+export const getGameLeaderboard = (
     gameId: string,
     query: LeagueBoardQuery & { competitionType?: LeagueCompetitionType } = {}
 ): Promise<LeagueIndividualBoard | LeagueCoupleBoard> => {
     const { competitionType, ...rest } = query;
-    const response = await axios.get(`${API_URL}/leaderboards/games/${gameId}`, {
-        headers: getAuthHeaders(),
-        params: {
-            ...leagueParams(rest),
-            ...(competitionType ? { competition_type: competitionType } : {}),
+    return cachedQuery({
+        queryKey: queryKeys.leaderboards.board(competitionType ?? 'individual', {
+            gameId,
+            ...rest,
+        }),
+        staleTime: CACHE_TIMES.leaderboards,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/leaderboards/games/${gameId}`, {
+                headers: getAuthHeaders(),
+                params: {
+                    ...leagueParams(rest),
+                    ...(competitionType ? { competition_type: competitionType } : {}),
+                },
+            });
+            return response.data;
         },
     });
-    return response.data;
 };
 
 /** The caller's own entries on one board, with ranks. */
-export const getMyLeagueStanding = async (
+export const getMyLeagueStanding = (
     competitionType: LeagueCompetitionType = 'individual',
     query: Omit<LeagueBoardQuery, 'gameId'> = {}
-): Promise<LeagueMyStanding> => {
-    const response = await axios.get(`${API_URL}/leaderboards/me`, {
-        headers: getAuthHeaders(),
-        params: {
-            ...leagueParams(query),
-            competition_type: competitionType,
+): Promise<LeagueMyStanding> =>
+    cachedQuery({
+        queryKey: queryKeys.leaderboards.myStanding(competitionType, query),
+        staleTime: CACHE_TIMES.leaderboards,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/leaderboards/me`, {
+                headers: getAuthHeaders(),
+                params: {
+                    ...leagueParams(query),
+                    competition_type: competitionType,
+                },
+            });
+            return response.data;
         },
     });
-    return response.data;
-};
 
 // --- Per-game leaderboard categories ---
 //
@@ -3981,38 +4143,53 @@ const gameCategoryParams = (query: GameCategoryQuery): Record<string, string | n
 };
 
 /** Selectable leaderboard views for one game. */
-export const getGameCategories = async (gameId: string): Promise<GameCategoryInfo[]> => {
-    const response = await axios.get(`${API_URL}/leaderboards/games/${gameId}/categories`, {
-        headers: getAuthHeaders(),
+export const getGameCategories = (gameId: string): Promise<GameCategoryInfo[]> =>
+    cachedQuery({
+        queryKey: queryKeys.leaderboards.categories(gameId),
+        staleTime: CACHE_TIMES.gameConfig,
+        queryFn: async () => {
+            const response = await axios.get(`${API_URL}/leaderboards/games/${gameId}/categories`, {
+                headers: getAuthHeaders(),
+            });
+            return response.data;
+        },
     });
-    return response.data;
-};
 
 /** One game's category leaderboard, ranked over the full filtered set. */
-export const getGameCategoryBoard = async (
+export const getGameCategoryBoard = (
     gameId: string,
     category: string,
     query: GameCategoryQuery = {},
-): Promise<GameCategoryBoard> => {
-    const response = await axios.get(
-        `${API_URL}/leaderboards/games/${gameId}/boards/${category}`,
-        { headers: getAuthHeaders(), params: gameCategoryParams(query) },
-    );
-    return response.data;
-};
+): Promise<GameCategoryBoard> =>
+    cachedQuery({
+        queryKey: queryKeys.leaderboards.categoryBoard(gameId, category, query),
+        staleTime: CACHE_TIMES.leaderboards,
+        queryFn: async () => {
+            const response = await axios.get(
+                `${API_URL}/leaderboards/games/${gameId}/boards/${category}`,
+                { headers: getAuthHeaders(), params: gameCategoryParams(query) },
+            );
+            return response.data;
+        },
+    });
 
 /** The caller's own rows on one category board, with full-dataset ranks. */
-export const getGameCategoryMe = async (
+export const getGameCategoryMe = (
     gameId: string,
     category: string,
     query: GameCategoryQuery = {},
-): Promise<GameCategoryMe> => {
-    const response = await axios.get(
-        `${API_URL}/leaderboards/games/${gameId}/boards/${category}/me`,
-        { headers: getAuthHeaders(), params: gameCategoryParams(query) },
-    );
-    return response.data;
-};
+): Promise<GameCategoryMe> =>
+    cachedQuery({
+        queryKey: queryKeys.leaderboards.categoryMe(gameId, category, query),
+        staleTime: CACHE_TIMES.leaderboards,
+        queryFn: async () => {
+            const response = await axios.get(
+                `${API_URL}/leaderboards/games/${gameId}/boards/${category}/me`,
+                { headers: getAuthHeaders(), params: gameCategoryParams(query) },
+            );
+            return response.data;
+        },
+    });
 
 /** Selectable leaderboard views for one game, as the console reads them. */
 export const getAdminGameCategories = async (gameId: string): Promise<GameCategoryInfo[]> => {
@@ -4113,6 +4290,8 @@ export const finalizeLeagueOpportunity = async (
         { game_id: gameId, opportunity_id: opportunityId },
         { headers: getAuthHeaders() }
     );
+    // A finalization writes awards, so every board that reads the ledger is stale.
+    await invalidateLeaderboardQueries();
     return response.data;
 };
 

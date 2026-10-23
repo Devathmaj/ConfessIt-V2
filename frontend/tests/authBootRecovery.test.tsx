@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
   mode: 'ok' as 'ok' | 'hang' | 'server-error' | 'rejected',
   reads: 0,
   logouts: 0,
+  refreshUser: null as Record<string, unknown> | null,
   current: {
     id: 'a-uuid',
     name: 'Someone',
@@ -64,7 +65,12 @@ vi.mock('axios', () => ({
     },
     post: async (url?: string) => {
       if (typeof url === 'string' && url.endsWith('/auth/refresh')) {
-        return { data: { access_token: 'boot-token' } };
+        return {
+          data: {
+            access_token: 'boot-token',
+            ...(api.refreshUser ? { user: api.refreshUser } : {}),
+          },
+        };
       }
       if (typeof url === 'string' && url.endsWith('/auth/logout')) {
         api.logouts += 1;
@@ -96,11 +102,33 @@ beforeEach(() => {
   api.mode = 'ok';
   api.reads = 0;
   api.logouts = 0;
+  api.refreshUser = null;
   clearAccessToken();
   vi.clearAllMocks();
 });
 
 describe('the boot handshake', () => {
+  it('initializes from the refresh payload without a second account read', async () => {
+    api.refreshUser = { ...api.current };
+
+    renderApp();
+
+    await waitFor(() => expect(screen.getByText('SIGNED IN:SOME-REG')).toBeInTheDocument(), {
+      timeout: 2000,
+    });
+    expect(api.reads).toBe(0);
+    expect(getAccessToken()).toBe('boot-token');
+  });
+
+  it('falls back to /auth/me when an older refresh response omits the account', async () => {
+    renderApp();
+
+    await waitFor(() => expect(screen.getByText('SIGNED IN:SOME-REG')).toBeInTheDocument(), {
+      timeout: 2000,
+    });
+    expect(api.reads).toBe(1);
+  });
+
   it('leaves the loading state when the account read never answers', async () => {
     // The backend is up enough to refresh, and then stops answering. The app has
     // to come out of its splash screen anyway: the read has a budget, so the

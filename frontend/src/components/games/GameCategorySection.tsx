@@ -15,6 +15,8 @@ import {
   type GameCategoryInfo,
 } from '@/services/api';
 import { describeApiError } from '@/lib/apiError';
+import { queryKeys } from '@/lib/queryClient';
+import { useQueryInvalidation } from '@/lib/useQueryInvalidation';
 import {
   categoryEntryKey,
   categoryEntryName,
@@ -151,6 +153,12 @@ export const GameCategorySection = ({
   useEffect(() => {
     if (categoryId) void fetchBoard(0, false);
   }, [fetchBoard, categoryId]);
+
+  // Category boards are paginated locally, so the screen refetches explicitly
+  // when the shared leaderboard resource is invalidated.
+  useQueryInvalidation(queryKeys.leaderboards.root, () => {
+    if (categoryId && !loadingMore) void fetchBoard(0, false);
+  });
 
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {

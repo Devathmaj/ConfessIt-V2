@@ -17,7 +17,7 @@ from ..models import (
 )
 from ..postgres import Database
 from ..limits import PAGE_OFFSET_MAX
-from ..services import league_boards, league_game_boards
+from ..services import leaderboard_cache, league_boards, league_game_boards
 from ..services.authorization import require_participant
 from ..services.league_scoring import COMPETITION_COUPLE, COMPETITION_INDIVIDUAL
 
@@ -47,15 +47,22 @@ def individual_board(
 ) -> LeagueIndividualBoard:
     """Ranked individual standings: global or a single game's board."""
     del user  # identity gates the route; standings are not per-user.
+    window = leaderboard_cache.window_key(period, anchor)
     if game_id is not None:
-        board = league_boards.game_board(
-            db, game_id=game_id, competition_type=COMPETITION_INDIVIDUAL,
-            period=period, anchor=anchor, skip=skip, limit=limit,
+        board = leaderboard_cache.cached_board(
+            ("individual", game_id, period, window, skip, limit),
+            lambda: league_boards.game_board(
+                db, game_id=game_id, competition_type=COMPETITION_INDIVIDUAL,
+                period=period, anchor=anchor, skip=skip, limit=limit,
+            ),
         )
         return LeagueIndividualBoard(**board)
-    board = league_boards.global_board(
-        db, competition_type=COMPETITION_INDIVIDUAL,
-        period=period, anchor=anchor, skip=skip, limit=limit,
+    board = leaderboard_cache.cached_board(
+        ("individual", "-", period, window, skip, limit),
+        lambda: league_boards.global_board(
+            db, competition_type=COMPETITION_INDIVIDUAL,
+            period=period, anchor=anchor, skip=skip, limit=limit,
+        ),
     )
     return LeagueIndividualBoard(**board)
 
@@ -72,15 +79,22 @@ def couples_board(
 ) -> LeagueCoupleBoard:
     """Ranked couple standings: global or a single couple game's board."""
     del user
+    window = leaderboard_cache.window_key(period, anchor)
     if game_id is not None:
-        board = league_boards.game_board(
-            db, game_id=game_id, competition_type=COMPETITION_COUPLE,
-            period=period, anchor=anchor, skip=skip, limit=limit,
+        board = leaderboard_cache.cached_board(
+            ("couples", game_id, period, window, skip, limit),
+            lambda: league_boards.game_board(
+                db, game_id=game_id, competition_type=COMPETITION_COUPLE,
+                period=period, anchor=anchor, skip=skip, limit=limit,
+            ),
         )
         return LeagueCoupleBoard(**board)
-    board = league_boards.global_board(
-        db, competition_type=COMPETITION_COUPLE,
-        period=period, anchor=anchor, skip=skip, limit=limit,
+    board = leaderboard_cache.cached_board(
+        ("couples", "-", period, window, skip, limit),
+        lambda: league_boards.global_board(
+            db, competition_type=COMPETITION_COUPLE,
+            period=period, anchor=anchor, skip=skip, limit=limit,
+        ),
     )
     return LeagueCoupleBoard(**board)
 
@@ -101,9 +115,13 @@ def game_board(
 ):
     """One game's normalized leaderboard for a period and competition type."""
     del user
-    board = league_boards.game_board(
-        db, game_id=game_id, competition_type=competition_type,
-        period=period, anchor=anchor, skip=skip, limit=limit,
+    window = leaderboard_cache.window_key(period, anchor)
+    board = leaderboard_cache.cached_board(
+        ("game", game_id, competition_type, period, window, skip, limit),
+        lambda: league_boards.game_board(
+            db, game_id=game_id, competition_type=competition_type,
+            period=period, anchor=anchor, skip=skip, limit=limit,
+        ),
     )
     return _board_response(board, competition_type)
 
@@ -156,9 +174,13 @@ def game_category_board(
 ) -> GameCategoryBoard:
     """One game's category leaderboard ranked by native metrics."""
     del user
-    board = league_game_boards.category_board(
-        db, game_id=game_id, category=category,
-        period=period, anchor=anchor, skip=skip, limit=limit,
+    window = leaderboard_cache.window_key(period, anchor)
+    board = leaderboard_cache.cached_board(
+        ("category", game_id, category, period, window, skip, limit),
+        lambda: league_game_boards.category_board(
+            db, game_id=game_id, category=category,
+            period=period, anchor=anchor, skip=skip, limit=limit,
+        ),
     )
     return GameCategoryBoard(**board)
 

@@ -115,6 +115,15 @@ export const CONVERSATION_MESSAGE_MAX = 200;
 export const CONVERSATION_PARTICIPANT_MESSAGE_MAX = 100;
 
 /**
+ * The ceiling on chat rows held in client memory.
+ *
+ * Equal to the conversation's own cap, so the newest-anchored window can hold
+ * the whole thread without ever being unbounded. Chat is never written to
+ * localStorage or IndexedDB; a reconnect re-reads it from the backend.
+ */
+export const CHAT_IN_MEMORY_MESSAGE_MAX = CONVERSATION_MESSAGE_MAX;
+
+/**
  * The Case Closed detective thread: one thread per couple session, double
  * the matchmaking allowance (400 per thread, 200 per detective) so a full
  * five-actions-each investigation plus accusation debate fits. Mirrors
@@ -123,3 +132,6 @@ export const CONVERSATION_PARTICIPANT_MESSAGE_MAX = 100;
  */
 export const CASE_CLOSED_CONVERSATION_MESSAGE_MAX = 400;
 export const CASE_CLOSED_CONVERSATION_PARTICIPANT_MESSAGE_MAX = 200;
+
+/** The Case Closed thread's bounded in-memory window (never persisted). */
+export const CASE_CLOSED_CHAT_IN_MEMORY_MAX = CASE_CLOSED_CONVERSATION_MESSAGE_MAX;

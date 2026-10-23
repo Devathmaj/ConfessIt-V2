@@ -35,6 +35,8 @@ import {
   type LeagueMyStanding,
 } from '@/services/api';
 import { describeApiError } from '@/lib/apiError';
+import { queryKeys } from '@/lib/queryClient';
+import { useQueryInvalidation } from '@/lib/useQueryInvalidation';
 import { cn } from '@/lib/utils';
 
 /**
@@ -208,6 +210,17 @@ export const GamesLeaderboardPage = () => {
   useEffect(() => {
     void fetchBoard(0, false);
   }, [fetchBoard]);
+
+  // This screen owns pagination, so it cannot hand the read to useQuery. A
+  // leaderboard invalidation (finalization, scheduled reset) reloads the first
+  // page explicitly; the category section owns the per-game view.
+  useQueryInvalidation(
+    queryKeys.leaderboards.root,
+    () => {
+      if (!loadingMore) void fetchBoard(0, false);
+    },
+    !gameSelected,
+  );
 
   // The viewer's row on the board currently on screen, matched by identity
   // (never by display name: two accounts can share "Test User MA2"). On a

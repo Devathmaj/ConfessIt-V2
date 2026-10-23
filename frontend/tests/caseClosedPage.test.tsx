@@ -26,7 +26,7 @@ vi.mock('@/lib/caseClosedMessaging', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/caseClosedMessaging')>();
   return {
     ...actual,
-    caseClosedMessagingClient: { connect: vi.fn(), onMessage: vi.fn(() => () => {}), onError: vi.fn(() => () => {}), disconnect: vi.fn() },
+    caseClosedMessagingClient: { connect: vi.fn(), onMessage: vi.fn(() => () => {}), onError: vi.fn(() => () => {}), onReconnect: vi.fn(() => () => {}), disconnect: vi.fn() },
   };
 });
 

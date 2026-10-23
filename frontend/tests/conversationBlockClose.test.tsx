@@ -34,6 +34,7 @@ const messaging = vi.hoisted(() => ({
     disconnect: vi.fn(),
     onMessage: vi.fn((_callback: (message: Record<string, unknown>) => void) => () => {}),
     onError: vi.fn(() => () => {}),
+    onReconnect: vi.fn(() => () => {}),
   },
   sendMessage: vi.fn(),
   fetchMessages: vi.fn(async () => ({ messages: [], quota: null, total: 0 })),

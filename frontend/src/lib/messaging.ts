@@ -80,10 +80,13 @@ class MessagingClient {
   private conversationId: string | null = null;
   private messageCallbacks: Set<MessageCallback> = new Set();
   private errorCallbacks: Set<ErrorCallback> = new Set();
+  private reconnectCallbacks: Set<() => void> = new Set();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private pingInterval: number | null = null;
+  /** True while this connect is the retry of a dropped socket, not the first open. */
+  private recovering = false;
 
   /**
    * The connection's generation.
@@ -160,8 +163,22 @@ class MessagingClient {
             const data: WebSocketMessage = JSON.parse(event.data);
             
             if (data.type === 'connected') {
-              console.log('✅ WebSocket authenticated:', data.user_regno);
+              console.log('WebSocket authenticated:', data.user_regno);
+              const recovered = this.recovering;
+              this.recovering = false;
               resolve(true);
+              // A reconnect means messages may have been published while the
+              // socket was down. The authoritative transcript is re-read by the
+              // subscriber; the socket itself only carries what happens next.
+              if (recovered) {
+                this.reconnectCallbacks.forEach((callback) => {
+                  try {
+                    callback();
+                  } catch (error) {
+                    console.error('Error in reconnect callback:', error);
+                  }
+                });
+              }
             } else if (data.type === 'message' && data.data) {
               // Broadcast message to all callbacks
               this.messageCallbacks.forEach(callback => {
@@ -214,6 +231,7 @@ class MessagingClient {
           // Attempt to reconnect if not a normal closure
           if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
+            this.recovering = true;
             console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`);
             setTimeout(() => {
               if (this.conversationId) {
@@ -254,6 +272,20 @@ class MessagingClient {
     
     return () => {
       this.errorCallbacks.delete(callback);
+    };
+  }
+
+  /**
+   * Subscribe to a successful recovery after a dropped socket.
+   *
+   * Fired only for a reconnect, not for the first open: a caller uses it to
+   * re-read the newest transcript page, which is how messages published while
+   * offline are recovered. The socket's own message stream is not replayed.
+   */
+  onReconnect(callback: () => void): () => void {
+    this.reconnectCallbacks.add(callback);
+    return () => {
+      this.reconnectCallbacks.delete(callback);
     };
   }
 
@@ -310,7 +342,9 @@ class MessagingClient {
     this.conversationId = null;
     this.messageCallbacks.clear();
     this.errorCallbacks.clear();
+    this.reconnectCallbacks.clear();
     this.reconnectAttempts = 0;
+    this.recovering = false;
   }
 
   /**

@@ -48,10 +48,13 @@ class CaseClosedMessagingClient {
   private ws: WebSocket | null = null;
   private messageCallbacks: Set<MessageCallback> = new Set();
   private errorCallbacks: Set<ErrorCallback> = new Set();
+  private reconnectCallbacks: Set<() => void> = new Set();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private pingInterval: number | null = null;
+  /** True while this connect is the retry of a dropped socket, not the first open. */
+  private recovering = false;
 
   /**
    * The connection's generation.
@@ -71,11 +74,17 @@ class CaseClosedMessagingClient {
    * nothing and answers false, so the caller knows not to subscribe to a
    * socket that will never deliver anything.
    */
-  async connect(): Promise<boolean> {
+  async connect(reconnect = false): Promise<boolean> {
     if (this.ws?.readyState === WebSocket.OPEN) {
       return true;
     }
-    this.disconnect();
+    if (reconnect) {
+      // A reconnect must keep the subscribers and the recovering flag that the
+      // dropped socket set. Full disconnect() is for the dialog closing.
+      this.closeSocket();
+    } else {
+      this.disconnect();
+    }
     // Read after the disconnect, which moves the generation on: this connect
     // belongs to the generation it starts in.
     const generation = this.generation;
@@ -106,7 +115,18 @@ class CaseClosedMessagingClient {
           try {
             const data: WsFrame = JSON.parse(event.data);
             if (data.type === 'connected') {
+              const recovered = this.recovering;
+              this.recovering = false;
               resolve(true);
+              if (recovered) {
+                this.reconnectCallbacks.forEach((callback) => {
+                  try {
+                    callback();
+                  } catch (error) {
+                    console.error('Error in Case Closed reconnect callback:', error);
+                  }
+                });
+              }
             } else if (data.type === 'message' && data.data) {
               this.messageCallbacks.forEach((callback) => {
                 try {
@@ -147,8 +167,9 @@ class CaseClosedMessagingClient {
           }
           if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
+            this.recovering = true;
             setTimeout(() => {
-              this.connect().catch((error) => {
+              this.connect(true).catch((error) => {
                 console.error('Case Closed WS reconnect failed:', error);
               });
             }, this.reconnectDelay * this.reconnectAttempts);
@@ -174,20 +195,35 @@ class CaseClosedMessagingClient {
     };
   }
 
+  /** Fired after a dropped socket reopens; re-read the transcript here. */
+  onReconnect(callback: () => void): () => void {
+    this.reconnectCallbacks.add(callback);
+    return () => {
+      this.reconnectCallbacks.delete(callback);
+    };
+  }
+
+  private closeSocket(): void {
+    if (!this.ws) return;
+    try {
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close(1000);
+      }
+    } catch {
+      /* already gone */
+    }
+    this.ws = null;
+  }
+
   disconnect(): void {
     this.stopPingInterval();
     // The generation moves on, so a connect that is still waiting for its
     // ticket learns that its answer is no longer wanted and opens nothing.
     this.generation += 1;
-    if (this.ws) {
-      try {
-        if (this.ws.readyState === WebSocket.OPEN) this.ws.close(1000);
-      } catch {
-        /* already gone */
-      }
-      this.ws = null;
-    }
+    this.closeSocket();
     this.reconnectAttempts = 0;
+    this.recovering = false;
+    this.reconnectCallbacks.clear();
   }
 
   private startPingInterval() {

@@ -10,6 +10,7 @@ import ConfessItWebP from '@/assets/ConfessIt.webp';
 import ConfessItWebM from '@/assets/ConfessIt.webm';
 import ConfessItMP4 from '@/assets/ConfessIt.mp4';
 import { magicLinkEndpoint, SIGN_IN_CATEGORIES, type SignInCategory } from '@/lib/signInCategories';
+import { warmStaticAssets } from '@/lib/assetWarmup';
 import type { AccountType } from '@/lib/capabilities';
 
 /**
@@ -115,6 +116,10 @@ const clearPendingVerification = (accountType: AccountType) => {
 };
 
 const SignInPage = ({ category }: { category: SignInCategory }) => {
+  useEffect(() => {
+    void warmStaticAssets();
+  }, []);
+
   const [regno, setRegno] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 

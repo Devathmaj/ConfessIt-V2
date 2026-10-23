@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ..db_models import GameScoreAwardRecord, GameScoreOpportunityRecord
 from ..limits import GAME_IDS
 from ..postgres import Database
-from . import league_adapters as adapters
+from . import leaderboard_cache, league_adapters as adapters
 from .league_global_scoring import (
     GAME_SCORING_VERSION,
     GLOBAL_SCORING_VERSION,
@@ -260,6 +260,7 @@ def finalize_opportunity(db: Database, game_id: str, opportunity_id: str) -> dic
             session, game_id=game_id, opportunity_id=opportunity_id
         )
         outcome = _write_awards(session, game_id, opportunity_id, snapshot)
+        leaderboard_cache.invalidate()
         return {
             "game_id": game_id,
             "opportunity_id": opportunity_id,
@@ -425,6 +426,7 @@ def reprocess_opportunity(db: Database, game_id: str, opportunity_id: str) -> di
             row.superseded_at = moment
         session.flush()
         outcome = _write_awards(session, game_id, opportunity_id, snapshot)
+        leaderboard_cache.invalidate()
         return {
             "game_id": game_id,
             "opportunity_id": opportunity_id,

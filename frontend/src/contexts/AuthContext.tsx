@@ -2,15 +2,16 @@
 
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
-import { getCurrentUser, serverLogout, refreshAccessToken, setInMemoryToken, clearInMemoryToken, isTokenRejected } from '../services/api';
+import { getCurrentUser, serverLogout, setInMemoryToken, clearInMemoryToken, isTokenRejected } from '../services/api';
 import { API_URL } from '../lib/apiBase';
 import { purgeLegacyPersistedToken, subscribeToAccessToken } from '../lib/tokenStore';
 import { announceSessionEnded, onSessionEnded } from '../lib/sessionChannel';
-import { awaitPendingRefresh, invalidatePendingRefreshes } from '../lib/sessionRefresh';
+import { awaitPendingRefresh, invalidatePendingRefreshes, refreshSession } from '../lib/sessionRefresh';
 import { AUTH_EXPIRED_EVENT, SESSION_SUPERSEDED_EVENT } from '../lib/authEvents';
 import { signInPathFor } from '../lib/signInCategories';
 import { AccountType, asAccountType, Capability, can } from '../lib/capabilities';
 import type { UserGender } from '../lib/accountFields';
+import { clearPrivateQueryState, syncQueryIdentity } from '../lib/queryClient';
 
 
 // Used to define the structure of the User object
@@ -199,6 +200,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     invalidatePendingRefreshes();
     setUser(null);
     clearInMemoryToken();
+    // The query cache can hold per-account answers (feeds with this viewer's
+    // reactions, chat, admin queues). It is in memory only, and it is dropped
+    // before the next account can render, not merely marked stale.
+    syncQueryIdentity(null);
+    await clearPrivateQueryState();
 
     await awaitPendingRefresh();
     await serverLogout();
@@ -218,9 +224,35 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       onSessionEnded(() => {
         clearInMemoryToken();
         setUser(null);
+        syncQueryIdentity(null);
+        void clearPrivateQueryState();
       }),
     [],
   );
+
+  const applyAccount = useCallback((userData: User): boolean => {
+    const userId = userData.id;
+    if (!userId) return false;
+    const accountType = asAccountType(userData.account_type);
+    // A different account must never inherit the previous account's cached
+    // feeds, chat or admin queues. A token rotation for the same id is a no-op.
+    syncQueryIdentity(userId);
+    // Remembered on the way in as well as on the way out, so the very first logout after
+    // a fresh sign-in already knows the door without depending on the render order.
+    lastAccountType.current = accountType;
+    setUser({
+      ...userData,
+      id: userId, // Used to ensure the user object always has a consistent 'id' property
+      // Narrowed rather than cast, and in the fail-closed direction. If the server ever
+      // sends an account table this build does not know, the account keeps working as a
+      // participant instead of the client acting on a value it cannot reason about. The
+      // capability list is left exactly as sent; `can` is what treats an absent one as
+      // empty.
+      account_type: accountType,
+      capabilities: userData.capabilities ?? [],
+    });
+    return true;
+  }, []);
 
   const fetchAndSetUser = useCallback(async (currentToken: string): Promise<AccountRead> => {
     if (!currentToken) {
@@ -229,26 +261,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
     try {
       const userData = await getCurrentUser(currentToken);
-      
-      // Used to robustly get the user ID, whether the backend sends 'id' or 'id'
-      const userId = userData.id;
 
-      if (userId) {
-        const accountType = asAccountType(userData.account_type);
-        // Remembered on the way in as well as on the way out, so the very first logout after
-        // a fresh sign-in already knows the door without depending on the render order.
-        lastAccountType.current = accountType;
-        setUser({
-          ...userData,
-          id: userId, // Used to ensure the user object always has a consistent 'id' property
-          // Narrowed rather than cast, and in the fail-closed direction. If the server ever
-          // sends an account table this build does not know, the account keeps working as a
-          // participant instead of the client acting on a value it cannot reason about. The
-          // capability list is left exactly as sent; `can` is what treats an absent one as
-          // empty.
-          account_type: accountType,
-          capabilities: userData.capabilities ?? [],
-        });
+      if (applyAccount(userData)) {
         return 'read';
       }
       console.error("User ID is missing from the authentication response.");
@@ -268,7 +282,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       console.error("Could not read the signed-in account; the session is kept:", error);
       return 'unavailable';
     }
-  }, [logout]);
+  }, [applyAccount, logout]);
 
   useEffect(() => {
     // The boot handshake is bounded and cancellable: a backend that stops
@@ -283,14 +297,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       purgeLegacyPersistedToken();
       // The in-memory token does not survive a reload by design, so the session is
       // restored with one silent refresh through the HttpOnly cookie. A valid cookie
-      // comes back with a fresh bearer; anything else answers null and the browser
-      // simply stays signed out.
-      const restoredToken = await refreshAccessToken();
-      if (!restoredToken) {
+      // comes back with a fresh bearer and, now, the account that refresh just
+      // validated; anything else answers null and the browser stays signed out.
+      const restored = await refreshSession();
+      if (!restored) {
         setIsLoading(false);
         return;
       }
-      const outcome = await fetchAndSetUser(restoredToken);
+      const restoredToken = restored.accessToken;
+      // New servers send the /auth/me shape with the rotation, which removes the
+      // sequential account read from boot. An older server omits it, so fall back.
+      const outcome = restored.user && applyAccount(restored.user as unknown as User)
+        ? 'read'
+        : await fetchAndSetUser(restoredToken);
       // The app is ready either way. A session whose account could not be read is
       // still a session, and the guards decide what to show while it is recovered.
       setIsLoading(false);
@@ -314,7 +333,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       cancelled = true;
       timers.forEach(clearTimeout);
     };
-  }, [fetchAndSetUser]);
+  }, [applyAccount, fetchAndSetUser]);
 
   // The access token expires on its own schedule, and the token is already cleared by the
   // time this fires, so `logout` only has to drop the in-memory user to finish the job.

@@ -40,7 +40,8 @@ import {
   emptyCaseClosedQuota,
 } from '@/lib/caseClosedMessaging';
 import { quotaAfterIncomingMessage } from '@/lib/messageQuota';
-import { MESSAGE_BODY_MAX } from '@/lib/limits';
+import { CASE_CLOSED_CHAT_IN_MEMORY_MAX, MESSAGE_BODY_MAX } from '@/lib/limits';
+import { appendBounded, boundMessages } from '@/lib/boundedMessages';
 import {
   getCaseClosedMessages,
   reportCaseClosedMessage,
@@ -106,7 +107,9 @@ export const CaseClosedChatDialog = ({
       return false;
     }
     messageIdsRef.current.add(message.id);
-    setMessages((previous) => [...previous, message]);
+    setMessages((previous) =>
+      appendBounded(previous, message, CASE_CLOSED_CHAT_IN_MEMORY_MAX),
+    );
     setTotal((t) => t + 1);
     return true;
   };
@@ -137,13 +140,17 @@ export const CaseClosedChatDialog = ({
         setMessages((prev) => {
           if (!before) {
             // The list is replaced, so the known ids are replaced with it.
-            messageIdsRef.current = new Set(page.messages.map((message) => message.id));
-            return page.messages;
+            const window = boundMessages(page.messages, CASE_CLOSED_CHAT_IN_MEMORY_MAX);
+            messageIdsRef.current = new Set(window.map((message) => message.id));
+            return window;
           }
           // The older rows are added to the list, so their ids join the known ones.
           page.messages.forEach((message) => messageIdsRef.current.add(message.id));
           const known = new Set(prev.map((m) => m.id));
-          return [...page.messages.filter((m) => !known.has(m.id)), ...prev];
+          return boundMessages(
+            [...page.messages.filter((m) => !known.has(m.id)), ...prev],
+            CASE_CLOSED_CHAT_IN_MEMORY_MAX,
+          );
         });
       } catch (error) {
         toast.error(describeApiError(error, 'Could not load the detective thread.'));
@@ -174,6 +181,7 @@ export const CaseClosedChatDialog = ({
     subscribedRef.current = true;
     let offMessage: (() => void) | null = null;
     let offError: (() => void) | null = null;
+    let offReconnect: (() => void) | null = null;
     (async () => {
       try {
         const opened = await caseClosedMessagingClient.connect();
@@ -191,6 +199,7 @@ export const CaseClosedChatDialog = ({
           // by the send, which is why the echo must not spend it a second time.
           const added = appendMessage({
             ...incoming,
+            game_id: incoming.game_id ?? null,
             is_sender: incoming.sender_user_id === user?.id,
           });
           if (added) {
@@ -199,6 +208,12 @@ export const CaseClosedChatDialog = ({
           }
         });
         offError = caseClosedMessagingClient.onError(() => setConnected(false));
+        // Recover what the dropped socket missed from the authoritative thread.
+        // The transcript is never persisted to local storage or IndexedDB.
+        offReconnect = caseClosedMessagingClient.onReconnect(() => {
+          setConnected(true);
+          void load();
+        });
       } catch {
         setConnected(false);
       }
@@ -206,11 +221,12 @@ export const CaseClosedChatDialog = ({
     return () => {
       offMessage?.();
       offError?.();
+      offReconnect?.();
       caseClosedMessagingClient.disconnect();
       subscribedRef.current = false;
       setConnected(false);
     };
-  }, [sessionId, threadOpen, user?.id, scrollToBottom]);
+  }, [sessionId, threadOpen, user?.id, scrollToBottom, load]);
 
   useEffect(() => {
     scrollToBottom();

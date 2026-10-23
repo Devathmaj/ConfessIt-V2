@@ -24,7 +24,22 @@ import { setAccessToken } from './tokenStore';
 /** How long a refresh may wait before the session is treated as absent. */
 const REFRESH_TIMEOUT_MS = SESSION_REQUEST_TIMEOUT_MS;
 
-let refreshInFlight: Promise<string | null> | null = null;
+/**
+ * The account shape a refresh may carry alongside its token.
+ *
+ * The server sends the same payload as `/auth/me`, but this layer deliberately
+ * does not depend on the AuthContext's richer `User` type (that would create a
+ * cycle). The context validates the fields it needs and falls back to
+ * `/auth/me` if an older server omits this key.
+ */
+export type RefreshedUser = Record<string, unknown>;
+
+export interface RefreshedSession {
+  accessToken: string;
+  user: RefreshedUser | null;
+}
+
+let refreshInFlight: Promise<RefreshedSession | null> | null = null;
 
 /**
  * The session's generation.
@@ -67,7 +82,7 @@ export const awaitPendingRefresh = async (): Promise<void> => {
   }
 };
 
-const requestRefresh = async (generation: number): Promise<string | null> => {
+const requestRefresh = async (generation: number): Promise<RefreshedSession | null> => {
   try {
     // Carries the refresh cookie: without credentials the cookie never travels and
     // there is no session to extend.
@@ -91,11 +106,17 @@ const requestRefresh = async (generation: number): Promise<string | null> => {
       // signed out -- the very thing the log out has to survive.
       return null;
     }
+    // The server now returns the account it just validated with the refresh.
+    // Keep it untyped here; AuthContext is the only place that knows its shape.
+    const rawUser = response.data?.user;
+    const user = rawUser && typeof rawUser === 'object' && !Array.isArray(rawUser)
+      ? (rawUser as RefreshedUser)
+      : null;
     // Into the store, which is also what tells the auth context the token
     // changed: a rotated token that only the store knew about would leave the
     // context holding the expired one.
     setAccessToken(accessToken);
-    return accessToken;
+    return { accessToken, user };
   } catch {
     return null;
   }
@@ -116,7 +137,7 @@ const requestRefresh = async (generation: number): Promise<string | null> => {
  * Concurrent callers share one refresh: the server rotates on use, and two
  * rotations racing would cost one of them the cookie.
  */
-export const refreshAccessToken = async (): Promise<string | null> => {
+export const refreshSession = async (): Promise<RefreshedSession | null> => {
   if (!refreshInFlight) {
     const pending = requestRefresh(sessionGeneration);
     refreshInFlight = pending;
@@ -131,3 +152,12 @@ export const refreshAccessToken = async (): Promise<string | null> => {
   }
   return refreshInFlight;
 };
+
+/**
+ * Token-only view of {@link refreshSession}, for the interceptor and chat paths.
+ *
+ * The boot path uses `refreshSession` directly so it can consume the account
+ * payload; every other caller only needs the bearer and keeps this stable API.
+ */
+export const refreshAccessToken = async (): Promise<string | null> =>
+  (await refreshSession())?.accessToken ?? null;

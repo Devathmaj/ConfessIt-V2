@@ -27,6 +27,7 @@ from .services.redis_service import redis_service
 from .services.matchmaking_service import MatchmakingRefusal
 from .models import AccountDetails
 import uvicorn
+from .http_cache import HttpCacheMiddleware
 from .logger import get_logger, install_query_credential_redaction, otlp_transport
 from .telemetry import redact_client_url, redact_query_strings
 from opentelemetry import metrics, trace
@@ -728,6 +729,10 @@ app.add_middleware(TrustedHostMiddleware)
 _proxy_hosts = [h.strip() for h in settings.TRUSTED_PROXY_HOSTS.split(",") if h.strip()]
 if _proxy_hosts:
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_proxy_hosts)
+
+# Cache policy sits inside the security headers, so even a 304 carries the
+# baseline headers. It runs after the body is produced because it buffers JSON.
+app.add_middleware(HttpCacheMiddleware)
 
 # Added last so it runs outermost: every response -- routed, refused, or errored --
 # leaves with the baseline headers, including preflights and rate-limit refusals.
