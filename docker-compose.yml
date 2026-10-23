@@ -172,22 +172,6 @@ services:
           memory: 512M
           pids: 64
 
-  # postgres:
-  #   image: pgvector/pgvector:pg16
-  #   environment:
-  #     POSTGRES_USER: confessit
-  #     POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
-  #     POSTGRES_DB: ConfessIt
-  #   volumes:
-  #     - postgres_prod_data:/var/lib/postgresql/data
-  #     - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
-  #   restart: unless-stopped
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         cpus: "2"
-  #         memory: 2G
-
   redis:
     networks: [app]
     image: redis:7.2.16-alpine
@@ -356,7 +340,6 @@ services:
       start_period: 60s
 
 volumes:
-  postgres_prod_data:
   redis_prod_data:
   prometheus_data:
   grafana_data:

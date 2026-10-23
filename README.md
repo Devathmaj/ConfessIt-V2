@@ -110,8 +110,8 @@ any more, and runtime gameplay still never calls a model.
   with a contended advisory lock, provider failure/retry/park, stale-job
   reclaim, revoke during generation, hide mid-pipeline, difficulty snapshots,
   paginated admin reads). Run:
-  `docker compose exec backend python -m pytest tests/test_ai_game_automation.py -q`.
-  Frontend: `npm test -- --run tests/adminPlotTwist.test.tsx tests/adminCaseClosed.test.tsx`.
+  `docker compose -f docker-compose.test.yml run --rm backend-tests python -m pytest tests/test_ai_game_automation.py -q`.
+  Frontend: `docker compose -f docker-compose.test.yml run --rm frontend-tests npm test -- --run tests/adminPlotTwist.test.tsx tests/adminCaseClosed.test.tsx`.
 
 ### Hybrid search (keyword + semantic, confessions, pgvector + Azure text-embedding-3-small)
 
@@ -143,8 +143,9 @@ below, deduped so a row never appears twice.
   `EMBEDDING_MIN_QUERY_CHARS="3"` (shorter queries skip the provider),
   `EMBEDDING_SEARCH_RATE_LIMIT_PER_MINUTE="30"` (public bucket) and
   `EMBEDDING_ADMIN_SEARCH_RATE_LIMIT_PER_MINUTE="60"` (staff bucket, `0` disables).
-- PostgreSQL requirement: the `pgvector/pgvector:pg16` image (see
-  `docker-compose.yml` / `docker-compose.dev.yml` and `postgres-init.sql`
+- PostgreSQL requirement: a pgvector-capable server (the test stack uses the
+  `pgvector/pgvector:pg16` image and `postgres-init.sql`; deployed environments
+  point `PG*` / `DATABASE_URL` at their own instance, which must provide
   `CREATE EXTENSION IF NOT EXISTS vector`). Keyword search reuses the existing
   pg_trgm GIN indexes on `confessions(body)` / `confessions(recipient_name)`
   (`ix_trgm_confessions_body`, `ix_trgm_confessions_recipient_name`, created at
@@ -183,5 +184,5 @@ below, deduped so a row never appears twice.
   queries, 422s, admin filter/sort) plus `backend/tests/test_semantic_search.py`
   (24 tests, endpoint assertions updated to the hybrid shape). Provider calls are
   mocked; vector ordering/threshold run against real pgvector. Run:
-  `docker compose exec backend python -m pytest tests/test_hybrid_search.py tests/test_semantic_search.py -v`.
-  Frontend: `npm test -- --run tests/confessionsHybridSearch.test.tsx tests/confessionsAdminPaging.test.tsx`.
+  `docker compose -f docker-compose.test.yml run --rm backend-tests python -m pytest tests/test_hybrid_search.py tests/test_semantic_search.py -v`.
+  Frontend: `docker compose -f docker-compose.test.yml run --rm frontend-tests npm test -- --run tests/confessionsHybridSearch.test.tsx tests/confessionsAdminPaging.test.tsx`.

@@ -167,6 +167,9 @@ services:
       OTEL_EXPORTER_OTLP_INSECURE: "true"
     restart: unless-stopped
 
+  # Local development database alternative to the Azure instance in backend/.env.
+  # Uncomment and point backend/.env at this service; the test database and
+  # pgvector setup live in docker-compose.test.yml / postgres-init.sql instead.
   # postgres:
   #   image: pgvector/pgvector:pg16
   #   environment:
@@ -175,7 +178,6 @@ services:
   #     POSTGRES_DB: ConfessIt
   #   volumes:
   #     - postgres_data:/var/lib/postgresql/data
-  #     - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
   redis:
     networks: [app]
     pids_limit: 128

@@ -505,7 +505,7 @@ class PostgresClient:
                 if not installed:
                     logger.warning(
                         "pgvector extension unavailable; confession embeddings "
-                        "require the pgvector extension (see docker-compose.yml)"
+                        "require the pgvector extension on the PostgreSQL server"
                     )
                     return False
                 return True
