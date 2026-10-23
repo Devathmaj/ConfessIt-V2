@@ -308,9 +308,14 @@ def schedule_puzzle(
                 groups=normalized,
                 created_by=created_by,
             )
-            session.add(row)
             try:
                 with session.begin_nested():
+                    # The insert belongs inside the savepoint: begin_nested()
+                    # flushes pending state before it opens one, so adding the
+                    # row earlier put the INSERT in the outer transaction and
+                    # its unique violation rolled the whole transaction back,
+                    # leaving the retry below unable to query.
+                    session.add(row)
                     session.flush()
             except IntegrityError:
                 # Retry update on concurrent insert conflict for same date.

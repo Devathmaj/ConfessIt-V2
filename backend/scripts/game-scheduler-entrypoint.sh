@@ -46,7 +46,7 @@ read_setting() {
 
 # Settings required by app.config.Settings to bake into the cron wrapper.
 REQUIRED_SETTINGS="PGHOST PGUSER PGPORT PGDATABASE PGPASSWORD REDIS_URL SECRET_KEY TOKEN_HASH_PEPPER"
-OPTIONAL_SETTINGS="CHAT_CLEANUP_BATCH_SIZE"
+OPTIONAL_SETTINGS="CHAT_CLEANUP_BATCH_SIZE PGSSLMODE"
 
 # All validation happens before any file is written, so a refused value leaves
 # no half-generated wrapper behind.

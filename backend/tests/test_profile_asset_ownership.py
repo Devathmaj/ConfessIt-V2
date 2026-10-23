@@ -426,10 +426,14 @@ async def test_the_old_object_survives_a_failed_database_write(monkeypatch, dest
     with pytest.raises(RuntimeError):
         await profile_service.upload_profile_picture_service(_user_details(OWNER), db, _upload_file())
 
-    assert destroyed == [], (
+    # The old object must survive; only the orphaned new upload may be discarded.
+    assert all(public_id != OWNED_ID for public_id, *_ in destroyed), (
         "the previous asset was destroyed even though the write that should have replaced it "
         "never landed"
     )
+    assert destroyed == [
+        (f"profile_pics/{OWNER}/NewOneTwoThreeFourFiveSix/profile", "upload", True)
+    ]
 
 
 @pytest.mark.asyncio

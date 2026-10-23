@@ -329,6 +329,19 @@ def finalize_due_opportunities(
             # after the native event has ended; filtering here avoids retrying
             # every active opportunity and logging the expected 409 each pass.
             missing = adapters.closed_opportunities(session, game_id, unfinalized)
+            existing = set(
+                adapters.existing_opportunities(session, game_id, unfinalized)
+            )
+            vanished = [opportunity_id for opportunity_id in unfinalized if opportunity_id not in existing]
+        for opportunity_id in vanished:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "League due scan skipped finalization for %s opportunity %s: "
+                "the native event no longer exists",
+                game_id,
+                opportunity_id,
+            )
         for opportunity_id in missing:
             try:
                 finalize_opportunity(db, game_id, opportunity_id)

@@ -135,13 +135,14 @@ def seed_session(db, groups=GROUPS, day=None, status="active"):
         game_id = str(game.id)
         if status == "active":
             for group_index, group in enumerate(groups):
-                for display in group:
+                for position, display in enumerate(group):
                     session.add(
                         ConnectionsWordRecord(
                             connections_game_id=game_id,
                             word_display=display,
                             word_normalized=display.strip().lower(),
                             group_index=group_index,
+                            position_in_group=position,
                         )
                     )
         session.flush()

@@ -42,6 +42,7 @@ from opentelemetry.semconv.attributes.http_attributes import (
 )
 
 from app.main import BOUNDED_HTTP_METRIC_ATTRIBUTES
+from app.config import settings
 
 # The exact query string from the audit report. The same two values the trace
 # redaction test uses, so a regression that leaks either into metrics is caught by
@@ -344,7 +345,8 @@ def test_init_metrics_registers_a_provider_and_the_bounded_view(monkeypatch):
     monkeypatch.setattr(
         main_module.metrics, "set_meter_provider", lambda provider: registered.setdefault("provider", provider)
     )
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+    monkeypatch.setattr(settings, "OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+    monkeypatch.setattr(settings, "OTEL_EXPORTER_OTLP_INSECURE", True)
 
     main_module._init_metrics()
 
@@ -372,7 +374,8 @@ def test_init_metrics_exports_to_the_configured_otlp_endpoint(monkeypatch):
     monkeypatch.setattr(
         main_module.metrics, "set_meter_provider", lambda provider: registered.setdefault("provider", provider)
     )
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+    monkeypatch.setattr(settings, "OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+    monkeypatch.setattr(settings, "OTEL_EXPORTER_OTLP_INSECURE", True)
 
     main_module._init_metrics()
 
@@ -393,7 +396,7 @@ def test_init_metrics_does_nothing_without_an_endpoint(monkeypatch):
 
     registered = []
     monkeypatch.setattr(main_module.metrics, "set_meter_provider", registered.append)
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.setattr(settings, "OTEL_EXPORTER_OTLP_ENDPOINT", None)
 
     main_module._init_metrics()
 

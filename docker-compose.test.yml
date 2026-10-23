@@ -1,0 +1,133 @@
+# Isolated test stack. The development and production compose files are untouched;
+# this one is standalone (`docker compose -f docker-compose.test.yml ...`).
+#
+#   docker compose -f docker-compose.test.yml run --rm backend-tests
+#   docker compose -f docker-compose.test.yml run --rm frontend-tests
+#   docker compose -f docker-compose.test.yml run --rm backend-tests \
+#     python -m pytest tests/test_login_rate_limits.py -q
+#
+# Why this exists: the suite is destructive (it truncates every table between
+# tests) and must never touch the Azure database in backend/.env. Running it from
+# the host previously pointed TEST_DATABASE_URL at that remote server, so every
+# test paid a cross-internet round trip and every module-scoped TestClient ran
+# schema convergence again. Here PostgreSQL and Redis are local containers and
+# the connection settings are explicit, so nothing reads backend/.env.
+#
+# A distinct project name keeps this stack out of the dev/prod project: `down -v`
+# here can never remove their containers, networks or volumes.
+name: confessit-test
+
+services:
+
+  postgres-test:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: confessit
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:-confessit_test_password}
+      POSTGRES_DB: ConfessIt
+    # The suite truncates ~70 tables before every test. fsync=off removes the
+    # per-truncate sync wait that made a Docker volume pathological on Windows.
+    # A tmpfs data directory was tried instead, but under host memory pressure
+    # its pages get swapped and checkpoints stalled for minutes, which let WAL
+    # grow past the mount and turned whole test modules into DiskFull errors.
+    # A disposable volume keeps memory pressure out of the picture.
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      # The suite generates a lot of WAL for a database that is truncated every
+      # test. Minimal logging plus compression shrinks it, and a short checkpoint
+      # interval prevents a single stalled checkpoint from backing WAL up.
+      - -c
+      - wal_level=minimal
+      - -c
+      - max_wal_senders=0
+      - -c
+      - wal_compression=on
+      - -c
+      - max_wal_size=512MB
+      - -c
+      - checkpoint_timeout=30s
+    volumes:
+      - pgdata-test:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-test-database.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U confessit -d ConfessIt"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    restart: "no"
+
+  redis-test:
+    image: redis:7.2.16-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+  backend-tests:
+    build:
+      # Root context so backend/tests (excluded by backend/.dockerignore for the
+      # runtime image) is available to the test image.
+      context: .
+      dockerfile: backend/Dockerfile.test
+    environment:
+      # Derived TEST_DATABASE_URL is "<PGDATABASE>_Test" (created by
+      # postgres-init.sql), so the suite truncates the isolated database only.
+      PGHOST: postgres-test
+      PGPORT: "5432"
+      PGUSER: confessit
+      PGPASSWORD: ${TEST_DB_PASSWORD:-confessit_test_password}
+      PGDATABASE: ConfessIt
+      PGSSLMODE: disable
+      # A local Redis makes the pub/sub capacity tests run instead of skipping.
+      REDIS_URL: redis://redis-test:6379/0
+      SECRET_KEY: e359d5a93f086c7c3a90b56c390fd03a1e700708cc21c5a5ebaf7ab01436c491
+      TOKEN_HASH_PEPPER: bb5e97d44532f0cf881d23496899e04175c30d8db62b501c5a22057ab1200e31
+      CHAT_ENCRYPTION_ACTIVE_KEY_VERSION: v1
+      CHAT_ENCRYPTION_KEY_V1: Y29uZmVzc2l0LXRlc3Qta2V5LTMyLWJ5dGVzLTAwMDA=
+      # app.main refuses to boot without Cloudinary credentials; no test makes a
+      # real Cloudinary call.
+      CLOUDINARY_CLOUD_NAME: test-cloud
+      CLOUDINARY_API_KEY: "123456789012345"
+      CLOUDINARY_API_SECRET: test-cloudinary-secret
+      # conftest.py pins these too; explicit here so nothing depends on backend/.env.
+      GLOBAL_RATE_LIMIT_PER_MINUTE: "0"
+      AI_GENERATION_WORKER_ENABLED: "false"
+      EMAIL_FUNCTION_URL: ""
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    init: true
+    restart: "no"
+
+  frontend-tests:
+    build:
+      context: ./frontend
+      # The dev image's .dockerignore drops tests/, so the test image has its
+      # own Dockerfile plus Dockerfile.test.dockerignore.
+      dockerfile: Dockerfile.test
+    command: ["npm", "test"]
+    environment:
+      CI: "true"
+    # observabilityWiring.test.ts reads the real repo-root files (it resolves
+    # ROOT as two levels above frontend/tests). The image only contains
+    # frontend/, so expose the checkout it is meant to validate.
+    volumes:
+      - ./observability:/observability:ro
+      - ./docker-compose.yml:/docker-compose.yml:ro
+    init: true
+    restart: "no"
+
+volumes:
+  pgdata-test:

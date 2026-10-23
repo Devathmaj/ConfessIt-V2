@@ -99,7 +99,7 @@ def test_rediss_url_requires_certificate_verification(monkeypatch):
     seen = {}
 
     class _Dummy:
-        pass
+        connection_kwargs = {}
 
     def _capture(url, **kwargs):
         seen.update(kwargs)
@@ -107,7 +107,7 @@ def test_rediss_url_requires_certificate_verification(monkeypatch):
 
     monkeypatch.setattr(settings, "REDIS_URL", "rediss://:secret@redis:6379")
     monkeypatch.setattr(
-        "app.services.redis_service.redis.from_url", _capture, raising=True
+        "app.services.redis_service.ConnectionPool.from_url", _capture, raising=True
     )
 
     RedisService()._get_client()
@@ -122,7 +122,7 @@ def test_plain_redis_url_adds_no_tls_options(monkeypatch):
     seen = {}
 
     class _Dummy:
-        pass
+        connection_kwargs = {}
 
     def _capture(url, **kwargs):
         seen.update(kwargs)
@@ -130,7 +130,7 @@ def test_plain_redis_url_adds_no_tls_options(monkeypatch):
 
     monkeypatch.setattr(settings, "REDIS_URL", "redis://redis:6379")
     monkeypatch.setattr(
-        "app.services.redis_service.redis.from_url", _capture, raising=True
+        "app.services.redis_service.ConnectionPool.from_url", _capture, raising=True
     )
 
     RedisService()._get_client()

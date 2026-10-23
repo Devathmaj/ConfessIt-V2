@@ -1,7 +1,7 @@
 """The scheduler entrypoint must not let the environment become shell.
 
-It generates a wrapper script and a cron.d file from DATABASE_URL, TZ,
-APP_DIR, PYTHON_BIN, CRON_FILE, WRAPPER and CRON_USER, and both the catch-up
+It generates a wrapper script and a cron.d file from the PG* connection
+settings, TZ, APP_DIR, PYTHON_BIN, CRON_FILE, WRAPPER and CRON_USER, and both the catch-up
 pass and the daily tick execute what it wrote -- the tick as appuser, via a
 root cron. An unquoted expansion or an unvalidated newline would turn a value
 into commands. These tests pin the three controls:
@@ -37,12 +37,19 @@ import pytest
 ENTRYPOINT = Path(__file__).resolve().parent.parent / "scripts" / "game-scheduler-entrypoint.sh"
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
-# Values the app's Settings model accepts (right driver, right scheme, strong
-# enough secrets). The entrypoint itself only checks that a required setting
-# is present and free of line breaks, but the wrapper is proved below to build
-# the app's settings, and that needs values the app would accept.
-VALID_DATABASE_URL = "postgresql+psycopg://u:pw@db:5432/ConfessIt"
-VALID_TEST_DATABASE_URL = "postgresql+psycopg://u:pw@db:5432/ConfessIt_Test"
+# Values the app's Settings model accepts (strong enough secrets). The
+# entrypoint itself only checks that a required setting is present and free of
+# line breaks, but the wrapper is proved below to build the app's settings, and
+# that needs values the app would accept. PostgreSQL is configured through the
+# PG* variables the Azure deployment supplies.
+VALID_PG_SETTINGS = {
+    "PGHOST": "db",
+    "PGPORT": "5432",
+    "PGUSER": "u",
+    "PGPASSWORD": "pw",
+    "PGDATABASE": "ConfessIt",
+    "PGSSLMODE": "disable",
+}
 VALID_REDIS_URL = "redis://:pw@redis:6379"
 VALID_SECRET_KEY = "e359d5a93f086c7c3a90b56c390fd03a1e700708cc21c5a5ebaf7ab01436c491"
 VALID_PEPPER = "bb5e97d44532f0cf881d23496899e04175c30d8db62b501c5a22057ab1200e31"
@@ -79,10 +86,9 @@ def _run(tmp_path, unset=(), **overrides):
 
     env = {
         "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
-        "DATABASE_URL": "postgres://u:pw@db:5432/x",
+        **VALID_PG_SETTINGS,
         # The rest of the required settings: cron(8) will not pass the
         # container environment to the tick, so the wrapper has to carry them.
-        "TEST_DATABASE_URL": VALID_TEST_DATABASE_URL,
         "REDIS_URL": VALID_REDIS_URL,
         "SECRET_KEY": VALID_SECRET_KEY,
         "TOKEN_HASH_PEPPER": VALID_PEPPER,
@@ -117,14 +123,14 @@ def test_clean_run_writes_quoted_wrapper_and_unprivileged_cron(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
     wrapper_text = paths["wrapper"].read_text()
-    assert "export DATABASE_URL='postgres://u:pw@db:5432/x'" in wrapper_text
+    assert "export PGHOST='db'" in wrapper_text
     assert f"cd '{paths['appdir']}'" in wrapper_text
     assert f"exec 'true' '{paths['appdir']}/scripts/run_game_resets.py'" in wrapper_text
     assert "export TZ" not in wrapper_text
-    assert stat.S_IMODE(os.stat(paths["wrapper"]).st_mode) == 0o755
+    assert stat.S_IMODE(os.stat(paths["wrapper"]).st_mode) == 0o644
 
     cron_text = paths["cron_file"].read_text()
-    assert f"1 0 * * * appuser {paths['wrapper']} > /proc/1/fd/1 2>&1" in cron_text
+    assert f"1 0 * * * appuser /bin/sh {paths['wrapper']} > /proc/1/fd/1 2>&1" in cron_text
     assert " root " not in cron_text
 
 
@@ -157,7 +163,16 @@ def test_wrapper_exports_every_setting_the_app_requires(tmp_path):
 
 @pytest.mark.parametrize(
     "missing",
-    ["DATABASE_URL", "TEST_DATABASE_URL", "REDIS_URL", "SECRET_KEY", "TOKEN_HASH_PEPPER"],
+    [
+        "PGHOST",
+        "PGPORT",
+        "PGUSER",
+        "PGPASSWORD",
+        "PGDATABASE",
+        "REDIS_URL",
+        "SECRET_KEY",
+        "TOKEN_HASH_PEPPER",
+    ],
 )
 def test_missing_required_setting_refuses_to_start(tmp_path, missing):
     """A scheduler that cannot build its settings must say so, not tick blind.
@@ -199,7 +214,6 @@ def test_wrapper_alone_builds_the_app_settings(tmp_path):
         tmp_path,
         PYTHON_BIN=str(probe),
         APP_DIR=str(appdir),
-        DATABASE_URL=VALID_DATABASE_URL,
     )
     assert proc.returncode == 0, proc.stderr
 
@@ -225,12 +239,12 @@ def test_hostile_database_url_round_trips_byte_for_byte(tmp_path):
     # survive single-quoting untouched -- proven by executing the wrapper, not
     # by eyeballing it. PYTHON_BIN is a stub that echoes the exported value;
     # the script path the wrapper appends is ignored by it.
-    nasty = "postgres://u:p@$$w0rd!`~'\\x@db:5432/x?sslmode=require"
+    nasty = "p@$$w0rd!`~'\\x"
     showenv = tmp_path / "bin" / "showenv"
     showenv.parent.mkdir(exist_ok=True)
-    showenv.write_text('#!/bin/sh\necho "GOT:$DATABASE_URL"\n')
+    showenv.write_text('#!/bin/sh\necho "GOT:$PGPASSWORD"\n')
     os.chmod(showenv, 0o755)
-    proc, _paths = _run(tmp_path, DATABASE_URL=nasty, PYTHON_BIN=str(showenv))
+    proc, _paths = _run(tmp_path, PGPASSWORD=nasty, PYTHON_BIN=str(showenv))
     assert proc.returncode == 0, proc.stderr
     assert f"GOT:{nasty}" in proc.stdout.splitlines()
 
@@ -254,8 +268,8 @@ def test_secret_with_a_line_break_is_refused(tmp_path):
         ("APP_DIR", "/tmp/with\\backslash"),
         ("PYTHON_BIN", "/usr/bin/py\ntouch /tmp/pwned"),
         ("PYTHON_BIN", "/usr/bin/`id`"),
-        ("DATABASE_URL", "postgres://u@h/db\nMALICIOUS=true"),
-        ("DATABASE_URL", "postgres://u@h/db\rMALICIOUS=true"),
+        ("PGPASSWORD", "hunter2\nMALICIOUS=true"),
+        ("PGPASSWORD", "hunter2\rMALICIOUS=true"),
         ("CRON_FILE", "/tmp/cron\n* * * * * root evil"),
         ("WRAPPER", "/tmp/w\nevil"),
         ("CRON_USER", "appuser\nmalicious"),

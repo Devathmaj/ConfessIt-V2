@@ -1,0 +1,10 @@
+# Same exclusions as .dockerignore, except tests/ must stay in the context so
+# the test image can run them.
+node_modules
+**/node_modules
+dist
+.env
+*/.env
+.git
+bun.lockb
+scripts/contrast-check.mjs

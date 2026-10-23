@@ -83,9 +83,13 @@ def schedule_word(
                 word=normalized,
                 created_by=created_by,
             )
-            session.add(row)
             try:
                 with session.begin_nested():
+                    # Add inside the savepoint: begin_nested() flushes pending
+                    # state first, so adding before it would put the INSERT in
+                    # the outer transaction and its unique violation would
+                    # abort the transaction the retry below needs.
+                    session.add(row)
                     session.flush()
             except IntegrityError:
                 # Retry update on concurrent insert conflict for same (game, date).

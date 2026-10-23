@@ -179,6 +179,26 @@ def closed_opportunities(session, game_id: str, opportunity_ids: list[str]) -> l
     return [str(row_id) for row_id in rows]
 
 
+def existing_opportunities(session, game_id: str, opportunity_ids: list[str]) -> list[str]:
+    """Return the candidate opportunities whose native event still exists.
+
+    A snapshot whose event was deleted can never be finalized; the due scan
+    compares this with its unfinalized list so the vanished row is reported
+    rather than retried invisibly forever.
+    """
+    if not opportunity_ids:
+        return []
+    try:
+        model = EVENT_MODELS[game_id]
+    except KeyError:
+        competition_type_for(game_id)
+        return []
+    rows = session.scalars(
+        select(model.id).where(model.id.in_(opportunity_ids))
+    ).all()
+    return [str(row_id) for row_id in rows]
+
+
 def opportunity_info(session, game_id: str, opportunity_id: str) -> Optional[OpportunityInfo]:
     """Canonical identity for one event, or None when it does not exist."""
     competition_type = competition_type_for(game_id)

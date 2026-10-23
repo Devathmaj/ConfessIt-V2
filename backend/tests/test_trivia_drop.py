@@ -565,7 +565,12 @@ def test_the_single_active_rule_is_a_database_constraint(db):
 def test_scheduled_times_follow_utc(db):
     admin = make_admin_client()
     _set_admin()
-    # 22:00 at +05:30 is 16:30 UTC -- stored converted.
+    # 22:00 at +05:30 is 16:30 UTC -- stored converted. The date is relative so
+    # this stays a future release whenever the suite runs.
+    scheduled_utc = (datetime.now(timezone.utc) + timedelta(days=2)).replace(
+        hour=16, minute=30, second=0, microsecond=0
+    )
+    ist = timezone(timedelta(hours=5, minutes=30))
     response = admin.post(
         "/admin/trivia-drop",
         json={
@@ -573,12 +578,12 @@ def test_scheduled_times_follow_utc(db):
             "options": OPTIONS,
             "correct_indexes": [0],
             "release_mode": "scheduled",
-            "scheduled_for": "2026-10-20T22:00:00+05:30",
+            "scheduled_for": scheduled_utc.astimezone(ist).isoformat(),
         },
     )
     assert response.status_code == 201, response.text
     stored = datetime.fromisoformat(response.json()["scheduled_for"])
-    assert stored == datetime(2026, 10, 20, 16, 30, tzinfo=timezone.utc)
+    assert stored == scheduled_utc
 
 
 def test_hidden_games_release_nothing(db):

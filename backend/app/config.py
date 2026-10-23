@@ -2,9 +2,9 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import URL, make_url
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 def _reject_weak_secret(value: str, *, field: str) -> str:
@@ -57,38 +57,69 @@ def _require_positive_int_or_none(value: int | None, *, field: str) -> int | Non
 class Settings(BaseSettings):
     # Keep connection details as separate environment variables so credentials with
     # URL-reserved characters are escaped safely when SQLAlchemy builds the DSN.
-    PGHOST: str = Field(...)
-    PGUSER: str = Field(...)
+    PGHOST: str | None = None
+    PGUSER: str | None = None
     PGPORT: int = 5432
-    PGDATABASE: str = Field(...)
-    PGPASSWORD: str = Field(...)
+    PGDATABASE: str | None = None
+    PGPASSWORD: str | None = None
     PGSSLMODE: str = "require"
 
-    @property
-    def DATABASE_URL(self) -> str:
-        """SQLAlchemy URL assembled from the standard PG* settings."""
-        return URL.create(
-            "postgresql+psycopg",
-            username=self.PGUSER,
-            password=self.PGPASSWORD,
-            host=self.PGHOST,
-            port=self.PGPORT,
-            database=self.PGDATABASE,
-            query={"sslmode": self.PGSSLMODE},
-        ).render_as_string(hide_password=False)
+    # Direct SQLAlchemy URLs remain accepted for one-shot scripts, CI and the test
+    # suite, which have always pinned these explicitly. When set they win over the
+    # PG* parts; when absent they are assembled from PG* by ``_assemble_database_urls``.
+    DATABASE_URL: str | None = None
+    TEST_DATABASE_URL: str | None = None
 
-    @property
-    def TEST_DATABASE_URL(self) -> str:
-        """Conventional isolated test database on the same PostgreSQL server."""
-        return URL.create(
-            "postgresql+psycopg",
-            username=self.PGUSER,
-            password=self.PGPASSWORD,
-            host=self.PGHOST,
-            port=self.PGPORT,
-            database=f"{self.PGDATABASE}_Test",
-            query={"sslmode": self.PGSSLMODE},
-        ).render_as_string(hide_password=False)
+    @field_validator("DATABASE_URL", "TEST_DATABASE_URL")
+    @classmethod
+    def _validate_optional_database_url(
+        cls, value: str | None, info: ValidationInfo
+    ) -> str | None:
+        """Only the driver this app speaks, when a direct URL is supplied."""
+        if value is None:
+            return None
+        return _require_url_scheme(
+            value,
+            field=info.field_name,
+            schemes=("postgresql+psycopg",),
+        )
+
+    @model_validator(mode="after")
+    def _assemble_database_urls(self) -> "Settings":
+        """Fill the two URLs from whichever source was configured.
+
+        PG* stays the deployment-facing form (see the module comment), but a direct
+        URL must still work: the scheduler wrapper, CI and the suite pass one, and
+        silently ignoring it turned every such run into a missing-setting failure.
+        """
+        if not self.DATABASE_URL:
+            missing = [
+                name
+                for name in ("PGHOST", "PGUSER", "PGPASSWORD", "PGDATABASE")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(
+                    "Database settings are incomplete: set DATABASE_URL, or all of "
+                    + ", ".join(missing)
+                    + "."
+                )
+            self.DATABASE_URL = URL.create(
+                "postgresql+psycopg",
+                username=self.PGUSER,
+                password=self.PGPASSWORD,
+                host=self.PGHOST,
+                port=self.PGPORT,
+                database=self.PGDATABASE,
+                query={"sslmode": self.PGSSLMODE},
+            ).render_as_string(hide_password=False)
+        if not self.TEST_DATABASE_URL:
+            self.TEST_DATABASE_URL = (
+                make_url(self.DATABASE_URL)
+                .set(database=f"{make_url(self.DATABASE_URL).database}_Test")
+                .render_as_string(hide_password=False)
+            )
+        return self
 
     # One engine per process (see app.postgres), so the worst-case Postgres connection
     # count is (POOL_SIZE + MAX_OVERFLOW) * WEB_WORKERS; keep that under max_connections.

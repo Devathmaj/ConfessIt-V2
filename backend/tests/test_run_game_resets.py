@@ -2,7 +2,7 @@
 
 cron(8) runs its jobs with a near-empty environment, so the tick sees only
 what the generated wrapper exports -- and the tick imports the app, whose
-Settings model refuses to be built without DATABASE_URL, TEST_DATABASE_URL,
+Settings model refuses to be built without the PG* connection settings,
 REDIS_URL, SECRET_KEY and TOKEN_HASH_PEPPER. When the wrapper exported only
 the database URL, the 00:01 tick died on a pydantic ValidationError before it
 evaluated a single game: no session rolled over, no AI generation cycle was
@@ -114,14 +114,25 @@ def _tick_env(exports):
     return env
 
 
-def _test_database_url():
-    """The URL of the database the suite is allowed to write to."""
+def _test_pg_settings():
+    """The PG* settings for the database the suite is allowed to write to.
+
+    conftest points the app at the test database (it truncates between tests),
+    so the tick under test writes there and never at the application's own data.
+    """
+    from sqlalchemy.engine import make_url
+
     from app.config import settings
 
-    # conftest points the app at the test database (it truncates between
-    # tests), so the tick under test writes there and never at the
-    # application's own data.
-    return settings.DATABASE_URL
+    url = make_url(settings.DATABASE_URL)
+    return {
+        "PGHOST": url.host,
+        "PGPORT": str(url.port or 5432),
+        "PGUSER": url.username,
+        "PGPASSWORD": url.password,
+        "PGDATABASE": url.database,
+        "PGSSLMODE": url.query.get("sslmode", "disable"),
+    }
 
 
 def test_tick_succeeds_with_only_the_wrapper_environment(tmp_path):
@@ -130,16 +141,14 @@ def test_tick_succeeds_with_only_the_wrapper_environment(tmp_path):
     The working directory is a temporary one, so no .env can stand in for a
     missing export -- the production image does not carry one either.
     """
-    database_url = _test_database_url()
     exports = _wrapper_exports(
         tmp_path,
-        DATABASE_URL=database_url,
-        TEST_DATABASE_URL=database_url,
+        **_test_pg_settings(),
         REDIS_URL="redis://:pw@redis:6379",
         SECRET_KEY=SECRET_KEY,
         TOKEN_HASH_PEPPER=PEPPER,
     )
-    assert "DATABASE_URL" in exports
+    assert "PGHOST" in exports
 
     result = subprocess.run(
         [sys.executable, str(SCRIPT)],
@@ -161,11 +170,9 @@ def test_configuration_failure_is_reported_through_the_sanitizing_handler(tmp_pa
     raw traceback (carrying the settings the tick was handed) went to the
     container log and the handler that redacts credentials never ran.
     """
-    database_url = _test_database_url()
     env = _tick_env(
         {
-            "DATABASE_URL": database_url,
-            "TEST_DATABASE_URL": database_url,
+            **_test_pg_settings(),
             "REDIS_URL": "redis://:pw@redis:6379",
             "TOKEN_HASH_PEPPER": PEPPER,
         }
