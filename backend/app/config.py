@@ -264,8 +264,10 @@ class Settings(BaseSettings):
     # --- Passwordless login: layered request limits ---
     # Three keys of increasing breadth: account keys the *submitted* regno (no enumeration
     # oracle), client is a cookie id defeating regno cycling, ip a coarse never-permanent brake
-    # (campus NAT/carriers). The long account window catches the steady drip the short window allows.
-    LOGIN_ACCOUNT_COOLDOWN_SECONDS: int = 300
+    # (campus NAT/carriers). The long account window is an additional hourly ceiling.
+    # The account cooldown matches the 15-minute magic-link lifetime: a resend becomes available
+    # only as the link it would replace expires.
+    LOGIN_ACCOUNT_COOLDOWN_SECONDS: int = 900
     LOGIN_ACCOUNT_LONG_WINDOW_SECONDS: int = 3600
     LOGIN_ACCOUNT_LONG_WINDOW_LIMIT: int = 5
     LOGIN_CLIENT_WINDOW_SECONDS: int = 300

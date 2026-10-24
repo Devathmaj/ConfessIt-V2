@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Heart, Mail, ShieldCheck, Clock } from 'lucide-react';
+import { Mail, ShieldCheck, Clock } from 'lucide-react';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { ScatteredIcons } from '@/components/ScatteredIcons';
-import { toast } from 'sonner';
 import ConfessItWebP from '@/assets/ConfessIt.webp';
 import ConfessItWebM from '@/assets/ConfessIt.webm';
 import ConfessItMP4 from '@/assets/ConfessIt.mp4';
+import { HeartLocket, type LocketState } from '@/components/heart-locket/HeartLocket';
 import { magicLinkEndpoint, SIGN_IN_CATEGORIES, type SignInCategory } from '@/lib/signInCategories';
 import { warmStaticAssets } from '@/lib/assetWarmup';
 import type { AccountType } from '@/lib/capabilities';
@@ -30,14 +30,13 @@ import type { AccountType } from '@/lib/capabilities';
  * answers every well-formed request identically (200) whether the number is registered,
  * blocked or unknown -- telling those apart would turn the form into an oracle for
  * account existence -- so a 200 always opens the verification-pending screen: it shows
- * the submitted registration number, counts the deadline the answer carried down, holds
- * the resend button until the account cooldown that answer charged has passed, and can
- * then send the link again or start over with a different number. A 429 or 400 never
- * leaves the first screen -- neither mints anything, and neither varies with account
- * state, so there is no token to verify and nothing to learn. The pending state is kept
- * under a localStorage key that is this door's alone, so refreshing the page keeps both
- * countdowns running instead of restarting them, and an expired token shows as expired
- * rather than silently dying.
+ * the submitted registration number, keeps the link's expiry deadline for the expired
+ * state, holds the resend button until the account cooldown that answer charged has
+ * passed, and can then send the link again or start over with a different number. A 429
+ * or 400 never leaves the first screen -- neither mints anything, and neither varies with
+ * account state, so there is no token to verify and nothing to learn. The pending state is
+ * kept under a localStorage key that is this door's alone, so refreshing the page keeps
+ * the resend cooldown running and the token expiry intact instead of restarting them.
  */
 
 /**
@@ -54,8 +53,10 @@ const LOGIN_TOKEN_EXPIRE_MINUTES = 15;
  * anything else, so the resend button is held for this window -- and when the server
  * answers a resend with a 429 that names its own `Retry-After`, that exact count is
  * adopted over this default, keeping the button in step with the window that enforces it.
+ * Fifteen minutes matches the magic-link lifetime, so a resend unlocks as the current
+ * link expires.
  */
-const LOGIN_ACCOUNT_COOLDOWN_SECONDS = 300;
+const LOGIN_ACCOUNT_COOLDOWN_SECONDS = 900;
 
 /**
  * One door's share of the persistence namespace. The pending state is keyed by account table
@@ -122,6 +123,7 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
 
   const [regno, setRegno] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // The same whitelist the backend enforces (app.services.auth_service._REGNO_PATTERN):
   // Unicode letters and digits from any script, underscore, and the . / - a real regno
@@ -130,18 +132,26 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
   // own language.
   const REGNO_PATTERN = /^[\p{L}\p{N}_.\-/]{1,100}$/u;
 
-  // The one sentence a mint answers with, fixed in the client: the server's message
-  // never varies either, but rendering it verbatim would let any future wording
-  // change distinguish outcomes per registration number. Fixed here, it cannot.
-  const LINK_SENT_MESSAGE =
-    'If this registration number is registered, a login link has been sent. Check your backend console — and double-check the number for typos.';
-
   // The verification-pending state, restored when this door is refreshed. Absent means the
   // input screen. It changes only on a server answer: a 200 puts it here, a refusal keeps it
   // null, and "change number" deliberately clears it.
   const [pending, setPending] = useState<PendingVerification | null>(() =>
     loadPendingVerification(category.accountType),
   );
+
+  // The locket is a separate explicit state machine from the authentication request. A
+  // restored pending sign-in opens already open; a live submission goes through `opening`
+  // before the verification screen becomes interactive.
+  const [locketState, setLocketState] = useState<LocketState>(() => (pending ? 'open' : 'closed'));
+
+  // The animation callbacks can arrive after a later state change (a transition event and
+  // the fallback timer can both fire). These refs make a stale completion a no-op and stop
+  // the close handler from clearing a pending sign-in twice.
+  const locketStateRef = useRef<LocketState>(locketState);
+  const closingHandledRef = useRef(false);
+  useEffect(() => {
+    locketStateRef.current = locketState;
+  }, [locketState]);
 
   // Seconds left until the token the server stored dies, ticked from `tokenExpiresAt` rather
   // than counted down by hand, so the number a refresh shows is whatever the current time
@@ -173,6 +183,10 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
     const minutes = Math.floor(total / 60);
     return `${String(minutes).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
   };
+
+  /** Whole seconds left until a deadline, never negative. */
+  const secondsUntil = (deadline: number): number =>
+    Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
 
   /** The token's deadline from a mint response, falling back on the local mirror. */
   const parseExpiry = (raw: unknown): number => {
@@ -206,13 +220,13 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading || locketState !== 'closed') return;
     setIsLoading(true);
+    setFormError(null);
 
     const trimmedRegno = regno.trim();
     if (!REGNO_PATTERN.test(trimmedRegno)) {
-      toast.error(
-        'Registration number must be 1 to 100 characters long and may contain only letters, numbers and the punctuation . / - _.',
-      );
+      setFormError('Use 1-100 letters, numbers or . / - _.');
       setIsLoading(false);
       return;
     }
@@ -222,41 +236,41 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
       if (response.ok) {
         // The server answers every well-formed request identically, whether the number
         // is registered or not, so there is nothing to branch on here: a 200 always
-        // opens the pending screen, and only a real mint produces a working link. The
-        // sentence is fixed rather than the server's `message`: rendering it verbatim
-        // would let any future wording change distinguish outcomes per account.
-        toast.success(LINK_SENT_MESSAGE);
+        // opens the pending screen, and only a real mint produces a working link.
         const next: PendingVerification = {
           authenticationState: 'verification_pending',
           validatedRegno: trimmedRegno,
           tokenExpiresAt: parseExpiry(body?.expires_at),
           // The answer charged this registration number's account cooldown, so the
-          // resend button is locked for the next five minutes.
+          // resend button is locked for the next fifteen minutes.
           resendAvailableAt: Date.now() + LOGIN_ACCOUNT_COOLDOWN_SECONDS * 1000,
         };
         setPending(next);
+        setRemaining(secondsUntil(next.tokenExpiresAt));
+        setCooldownRemaining(secondsUntil(next.resendAvailableAt));
         persistPendingVerification(category.accountType, next);
         setRegno('');
+        setLocketState(category.themed ? 'opening' : 'open');
       } else {
         // Fixed sentence for every refusal (429, 400, anything else): the server's
         // `detail` varies by cause, and rendering it would let callers distinguish
         // outcomes -- including cooldown states -- per registration number.
-        toast.error('Failed to generate magic link. Please try again.');
+        setFormError('Failed to generate magic link. Please try again.');
       }
     } catch (error) {
-      toast.error('An error occurred. Please try again.');
+      setFormError('An error occurred. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleResend = async () => {
-    if (!pending) return;
+    if (!pending || locketState !== 'open' || isLoading) return;
     setIsLoading(true);
+    setFormError(null);
     try {
       const { response, body } = await requestLink(pending.validatedRegno);
       if (response.ok) {
-        toast.success(LINK_SENT_MESSAGE);
         const next = {
           ...pending,
           tokenExpiresAt: parseExpiry(body?.expires_at),
@@ -264,115 +278,256 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
           resendAvailableAt: Date.now() + LOGIN_ACCOUNT_COOLDOWN_SECONDS * 1000,
         };
         setPending(next);
+        setRemaining(secondsUntil(next.tokenExpiresAt));
+        setCooldownRemaining(secondsUntil(next.resendAvailableAt));
         persistPendingVerification(category.accountType, next);
       } else {
         // Most likely 429: the cooldown is running. When the server names the exact wait
         // on its window, the countdown adopts it so the button stays in step with the
         // authority that enforces the window. Either way the pending screen stays -- the
         // server never reports a number as un-sign-in-able, so there is no outcome that
-        // ends the wait -- and the toast stays fixed: the server's sentence varies by
+        // ends the wait -- and the message stays fixed: the server's sentence varies by
         // cause and must not become per-number recon.
         const retryAfter = Number(response.headers.get('Retry-After'));
         if (Number.isFinite(retryAfter) && retryAfter > 0) {
           const next = { ...pending, resendAvailableAt: Date.now() + retryAfter * 1000 };
           setPending(next);
+          setCooldownRemaining(secondsUntil(next.resendAvailableAt));
           persistPendingVerification(category.accountType, next);
         }
-        toast.error('Too many requests. Please wait, then try again.');
+        setFormError('Too many requests. Please wait, then try again.');
       }
     } catch (error) {
-      toast.error('An error occurred. Please try again.');
+      setFormError('An error occurred. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleChangeNumber = () => {
-    // Deliberately starts over: the old token is abandoned (it is per-registration-number)
-    // and there is nothing valid to wait on until the next number is accepted.
+  const clearPendingSignIn = useCallback(() => {
     clearPendingVerification(category.accountType);
     setPending(null);
     setRegno('');
+    setFormError(null);
+    setRemaining(0);
+    setCooldownRemaining(0);
+  }, [category.accountType]);
+
+  const handleOpeningFinished = useCallback(() => {
+    if (locketStateRef.current !== 'opening') return;
+    setLocketState('open');
+  }, []);
+
+  const handleClosingFinished = useCallback(() => {
+    if (locketStateRef.current !== 'closing' || closingHandledRef.current) return;
+    closingHandledRef.current = true;
+
+    // The pending state is discarded only once the lid has covered it. Clearing it when
+    // the link is clicked would swap the verification screen for the login form while the
+    // exterior was still rotating in, which is exactly the flicker this transition avoids.
+    clearPendingSignIn();
+    setLocketState('closed');
+  }, [clearPendingSignIn]);
+
+  const handleChangeNumber = () => {
+    if (!pending) return;
+
+    // Staff doors have no locket; their "change number" is the original immediate reset.
+    if (!category.themed) {
+      clearPendingSignIn();
+      setLocketState('closed');
+      return;
+    }
+
+    // Deliberately starts the close instead of clearing immediately: the old token stays
+    // live until the login form is visible again, and the pending state is abandoned then.
+    if (locketState !== 'open') return;
+    closingHandledRef.current = false;
+    setFormError(null);
+    setLocketState('closing');
   };
 
-  const form = (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-2">
-        <div className="relative">
-          <Mail className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
+  const loginFields = (isLocket: boolean) => (
+    <form onSubmit={handleSubmit} className={isLocket ? 'locket-login__form' : 'space-y-4'}>
+      <div className={isLocket ? undefined : 'space-y-2'}>
+        <div className={isLocket ? undefined : 'relative'}>
+          {!isLocket && <Mail className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />}
           <Input
             type="text"
             placeholder={category.regnoPlaceholder}
             value={regno}
-            onChange={(e) => setRegno(e.target.value)}
+            onChange={(e) => {
+              setRegno(e.target.value);
+              setFormError(null);
+            }}
             maxLength={100}
-            disabled={isLoading}
-            className={
-              category.themed
-                ? 'pl-10 bg-background/80 border-romantic/30 focus:border-romantic'
-                : 'pl-10'
-            }
+            disabled={isLoading || locketState !== 'closed'}
+            aria-label={category.regnoPlaceholder}
+            aria-invalid={formError ? true : undefined}
+            aria-describedby={formError && isLocket ? 'locket-login-error' : undefined}
+            className={isLocket ? 'locket-input' : 'pl-10'}
             required
           />
         </div>
       </div>
 
+      {formError && !isLocket && (
+        <p role="alert" className="text-sm text-destructive">
+          {formError}
+        </p>
+      )}
+
       <Button
         type="submit"
-        className={category.themed ? 'w-full btn-romantic text-lg font-semibold' : 'w-full'}
-        disabled={isLoading}
+        className={isLocket ? 'locket-submit' : 'w-full'}
+        disabled={isLoading || locketState !== 'closed'}
       >
         {isLoading ? category.pendingCta : category.cta}
       </Button>
     </form>
   );
 
-  const verificationPanel = pending && (
-    <div className="space-y-4 text-center">
-      <div>
-        <p className="text-muted-foreground">We've sent a magic link to:</p>
-        <p className="mt-1 font-semibold break-all">{pending.validatedRegno}</p>
-        <p className="mt-2 text-sm text-muted-foreground">Is this your registration number?</p>
+  const renderLoginForm = (isLocket: boolean) => {
+    if (!isLocket) return loginFields(false);
+
+    return (
+      <div className="locket-login">
+        <h1 className="locket-login__brand">{category.title}</h1>
+        <div className="locket-login__subline">
+          {formError ? (
+            <p id="locket-login-error" role="alert" className="locket-login__error">
+              {formError}
+            </p>
+          ) : (
+            <p className="locket-login__tagline">{category.tagline}</p>
+          )}
+        </div>
+        {loginFields(true)}
+        <p className="locket-login__footer">Made with love for Valentine's Day 2026</p>
       </div>
+    );
+  };
 
-      {remaining > 0 ? (
-        <p role="timer" className="text-sm text-muted-foreground">
-          Token expires in: {formatClock(remaining)}
-        </p>
-      ) : (
-        <p className="text-sm text-amber-600">
-          {cooldownRemaining > 0
-            ? 'Token expired.'
-            : 'Token expired. You can request a new one now.'}
-        </p>
-      )}
+  const renderVerification = (isLocket: boolean) => {
+    if (!pending) return null;
 
-      <Button
-        type="button"
-        variant="outline"
-        className={category.themed ? 'w-full btn-romantic text-lg font-semibold' : 'w-full'}
-        onClick={handleResend}
-        disabled={isLoading || cooldownRemaining > 0}
+    return (
+      <div
+        className={
+          isLocket
+            ? `locket-verification${formError ? ' locket-verification--error' : ''}`
+            : 'space-y-4 text-center'
+        }
       >
-        {isLoading ? 'Sending...' : 'Resend Your Magic Link'}
-      </Button>
+        {isLocket && <h2>Verification Pending</h2>}
 
-      {cooldownRemaining > 0 && (
-        <p role="timer" className="text-center text-xs text-muted-foreground">
-          Resend available in {formatClock(cooldownRemaining)}.
-        </p>
-      )}
+        {isLocket ? (
+          <p className="locket-verification__copy">Magic link sent to your email.</p>
+        ) : (
+          <div className="space-y-1">
+            <p className="text-muted-foreground">We've sent a magic link to your email.</p>
+            {!formError && (
+              <p className="text-sm text-muted-foreground">
+                The link is only valid for {LOGIN_TOKEN_EXPIRE_MINUTES} minutes.
+              </p>
+            )}
+          </div>
+        )}
 
-      <button
-        type="button"
-        disabled={isLoading}
-        onClick={handleChangeNumber}
-        className="w-full text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
-      >
-        Wrong number? Change registration number
-      </button>
-    </div>
-  );
+        {isLocket ? (
+          remaining <= 0 && (
+            <p className="locket-verification__expired">
+              {cooldownRemaining > 0
+                ? 'The link has expired.'
+                : 'The link has expired. You can request a new one now.'}
+            </p>
+          )
+        ) : remaining > 0 ? (
+          <p role="timer" className="text-sm text-muted-foreground">
+            Expires in: {formatClock(remaining)}
+          </p>
+        ) : (
+          <p className="text-sm text-amber-600">
+            {cooldownRemaining > 0
+              ? 'The link has expired.'
+              : 'The link has expired. You can request a new one now.'}
+          </p>
+        )}
+
+        <Button
+          type="button"
+          variant={isLocket ? 'default' : 'outline'}
+          className={isLocket ? 'locket-resend' : 'w-full'}
+          onClick={handleResend}
+          disabled={isLoading || cooldownRemaining > 0 || locketState !== 'open'}
+        >
+          {isLoading ? 'Sending...' : 'Resend Your Magic Link'}
+        </Button>
+
+        {cooldownRemaining > 0 && (
+          <p
+            role="timer"
+            className={
+              isLocket
+                ? 'locket-verification__cooldown'
+                : 'text-center text-xs text-muted-foreground'
+            }
+          >
+            Resend available in {formatClock(cooldownRemaining)}.
+          </p>
+        )}
+
+        {formError && (
+          <p
+            role="alert"
+            className={isLocket ? 'locket-verification__error' : 'text-sm text-destructive'}
+          >
+            {formError}
+          </p>
+        )}
+
+        <div className={isLocket ? undefined : 'space-y-2'}>
+          {isLocket ? (
+            <p className="locket-verification__wrong">
+              Entered{' '}
+              <span className="locket-verification__regno" title={pending.validatedRegno}>
+                {pending.validatedRegno}
+              </span>
+              .
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Wrong registration number? You entered{' '}
+              <span className="font-semibold break-all">{pending.validatedRegno}</span>.
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={isLoading || locketState !== 'open'}
+            onClick={handleChangeNumber}
+            className={
+              isLocket
+                ? 'locket-verification__change'
+                : 'w-full text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground'
+            }
+          >
+            {isLocket ? (
+              <>
+                <span className="locket-verification__change-long">
+                  Wrong number? Change registration number
+                </span>
+                <span className="locket-verification__change-short">
+                  Change registration number
+                </span>
+              </>
+            ) : (
+              'Change registration number'
+            )}
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   // The participant door keeps the full Valentine's treatment. Staff doors are plain on
   // purpose: a moderator reaching for the moderation console should not be looking at the
@@ -380,7 +535,7 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
   if (!category.themed) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-muted/30">
-      <div className="relative w-full max-w-md z-10">
+        <div className="relative w-full max-w-md z-10">
           <Card>
             <CardHeader className="text-center space-y-3">
               <div className="mx-auto w-16 h-16 bg-muted rounded-full flex items-center justify-center">
@@ -395,11 +550,13 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
               </CardTitle>
               <CardDescription>
                 {pending
-                  ? "Confirm the number below, then open the link from the backend console."
+                  ? 'Confirm the registration number below, then open the link from the backend console.'
                   : category.tagline}
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">{pending ? verificationPanel : form}</CardContent>
+            <CardContent className="space-y-6">
+              {pending ? renderVerification(false) : renderLoginForm(false)}
+            </CardContent>
           </Card>
         </div>
       </div>
@@ -407,8 +564,8 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
-      <div className="absolute top-0 left-0 w-full h-full z-0">
+    <div className="heart-locket-page">
+      <div className="heart-locket-page__backdrop">
         <video
           poster={ConfessItWebP}
           preload="auto"
@@ -422,43 +579,25 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
           <source src={ConfessItMP4} type="video/mp4" />
           Your browser does not support the video tag.
         </video>
-        <div className="absolute top-0 left-0 w-full h-full bg-black/50"></div>
+        <div className="heart-locket-page__veil"></div>
       </div>
 
       <FloatingHearts />
-      {/* Scattered keepsakes around the sign-in card; front stays above the
-          video backdrop while the card sits on top. */}
       <ScatteredIcons variant="romance" front />
 
-      <div className="w-full max-w-md z-10">
-        <Card className="confession-card border-2 border-romantic/20 bg-background/80 backdrop-blur-sm">
-          <CardHeader className="text-center space-y-4">
-            <div className="mx-auto w-20 h-20 bg-gradient-romantic rounded-full flex items-center justify-center mb-4">
-              {pending ? (
-                <Clock className="w-10 h-10 text-white" />
-              ) : (
-                <Heart className="w-10 h-10 text-white animate-pulse-heart" fill="currentColor" />
-              )}
-            </div>
-            <CardTitle className="text-4xl font-dancing text-romantic">
-              {pending ? 'Verification Pending' : category.title}
-            </CardTitle>
-            <CardDescription className="text-lg text-muted-foreground">
-              {pending
-                ? "Confirm the number below, then open the link from the backend console."
-                : category.tagline}
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="space-y-6">
-            {pending ? verificationPanel : form}
-
-            <div className="text-center mt-6 text-sm text-muted-foreground">
-              <p className="sparkles">Made with love for Valentine's Day 2026</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <main className="heart-locket-page__content">
+        <HeartLocket
+          state={locketState}
+          loginContent={
+            locketState === 'closed' || locketState === 'opening'
+              ? renderLoginForm(true)
+              : null
+          }
+          verificationContent={renderVerification(true)}
+          onOpeningFinished={handleOpeningFinished}
+          onClosingFinished={handleClosingFinished}
+        />
+      </main>
     </div>
   );
 };

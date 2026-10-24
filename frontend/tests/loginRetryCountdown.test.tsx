@@ -10,13 +10,13 @@ import { Login } from '@/pages/Login';
  * The first screen asks for a registration number and submits it. The server answers
  * every well-formed request identically (200) whether the number is registered or not,
  * so a 200 always opens the verification-pending screen: the submitted number is shown,
- * a live "Token expires in" countdown runs off the deadline the answer carried, and the
- * resend button is held until the account cooldown that answer charged has passed -- a
- * second live "Resend available in" countdown shows how long. A refusal -- 429, 400 --
- * never leaves the first screen, because nothing was minted and there is no token to
- * verify. Both countdowns are stored as timestamps under the door's own localStorage
- * key, so a refresh restores them running instead of restarting them, and an expired
- * token shows as expired rather than silently dying.
+ * the panel confirms the email was sent, and the resend button is held until the account
+ * cooldown that answer charged has passed -- a live "Resend available in" countdown shows
+ * how long. The expiry itself is stated in the email, though an expired token still shows
+ * its expired state on the panel. A refusal -- 429, 400 -- never leaves the first screen,
+ * because nothing was minted and there is no token to verify. The cooldown and token
+ * deadlines are stored as timestamps under the door's own localStorage key, so a refresh
+ * restores the cooldown running instead of restarting it.
  *
  * These tests drive the real component against a scripted fetch.
  */
@@ -77,7 +77,7 @@ const seedPending = (overrides: {
       authenticationState: 'verification_pending',
       validatedRegno: 'shared-reg',
       tokenExpiresAt: overrides.tokenExpiresAt ?? now + 90_000,
-      resendAvailableAt: overrides.resendAvailableAt ?? now + 300_000,
+      resendAvailableAt: overrides.resendAvailableAt ?? now + 900_000,
     }),
   );
 };
@@ -117,14 +117,16 @@ describe('verification-pending sign-in', () => {
       expect(screen.getByRole('heading', { name: 'Verification Pending' })).toBeInTheDocument();
     });
     expect(screen.getByText('shared-reg')).toBeInTheDocument();
-    expect(screen.getByText(/Is this your registration number/)).toBeInTheDocument();
-    expect(screen.getByText(/Token expires in: \d{2}:\d{2}/)).toBeInTheDocument();
+    expect(screen.getByText('Magic link sent to your email.')).toBeInTheDocument();
+    // The email carries the expiry; the panel stays on the essentials.
+    expect(screen.queryByText(/only valid for 15 minutes/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Expires in:/)).not.toBeInTheDocument();
     // The mint answered this registration number, which charged the account cooldown:
     // the resend button is locked and counts the wait down live.
     expect(resendButton()).toBeDisabled();
-    expect(screen.getByText(/Resend available in 0[45]:\d{2}\./)).toBeInTheDocument();
+    expect(screen.getByText(/Resend available in 1[45]:\d{2}\./)).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /wrong number\? change registration number/i }),
+      screen.getByRole('button', { name: /change registration number/i }),
     ).toBeInTheDocument();
     // The input screen is gone; its submit button no longer exists.
     expect(screen.queryByRole('button', { name: /enter confessit/i })).not.toBeInTheDocument();
@@ -145,7 +147,6 @@ describe('verification-pending sign-in', () => {
       },
     ]);
     renderPage();
-    expect(screen.queryByText(/Token expires in/)).not.toBeInTheDocument();
 
     await typeAndSubmit('shared-reg');
 
@@ -155,7 +156,7 @@ describe('verification-pending sign-in', () => {
     expect(screen.queryByText(/only once every few minutes/i)).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'ConfessIt' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Verification Pending' })).not.toBeInTheDocument();
-    expect(screen.queryByText(/Token expires in|Resend available in/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Resend available in/)).not.toBeInTheDocument();
   });
 
   it('opens the same pending screen for an unregistered number -- no oracle', async () => {
@@ -172,14 +173,14 @@ describe('verification-pending sign-in', () => {
       expect(screen.getByRole('heading', { name: 'Verification Pending' })).toBeInTheDocument();
     });
     expect(screen.getByText('never-registered')).toBeInTheDocument();
-    expect(screen.getByText(/Token expires in: \d{2}:\d{2}/)).toBeInTheDocument();
+    expect(screen.getByText(/Resend available in 1[45]:\d{2}\./)).toBeInTheDocument();
     expect(resendButton()).toBeDisabled();
     expect(window.localStorage.getItem(PENDING_KEY)).not.toBeNull();
   });
 
-  it('restores a pending sign-in after refresh, keeping both countdowns running', async () => {
-    // The deadlines are timestamps, so a fresh render two seconds later shows ~2s less of
-    // the token's life and ~2s less of the resend wait -- never a restarted five minutes.
+  it('restores a pending sign-in after refresh, keeping the resend cooldown running', async () => {
+    // The cooldown deadline is a timestamp, so a fresh render two seconds later shows
+    // ~2s less of the resend wait -- never a restarted fifteen minutes.
     const expiresAt = new Date(Date.now() + 90_000).toISOString();
     const calls = stubFetch([{ ok: true, status: 200, body: successBody(expiresAt) }]);
     const { unmount } = renderPage();
@@ -189,13 +190,12 @@ describe('verification-pending sign-in', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Verification Pending' })).toBeInTheDocument();
     });
-    const firstTimer = screen.getByText(/Token expires in/).textContent ?? '';
     const firstResendWait = screen.getByText(/Resend available in/).textContent ?? '';
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 2000));
     });
-    const beforeRefreshTimer = screen.getByText(/Token expires in/).textContent ?? '';
+    const beforeRefreshResendWait = screen.getByText(/Resend available in/).textContent ?? '';
     unmount();
 
     // "Refresh": a brand-new component reads the same stored key from this door.
@@ -203,19 +203,18 @@ describe('verification-pending sign-in', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Verification Pending' })).toBeInTheDocument();
     });
-    const restoredTimer = screen.getByText(/Token expires in/).textContent ?? '';
+    const restoredResendWait = screen.getByText(/Resend available in/).textContent ?? '';
 
     expect(calls).toHaveLength(1); // the refresh performed no new request
     expect(screen.getByText('shared-reg')).toBeInTheDocument();
     // The resend cooldown survived the refresh too: the button is still locked.
     expect(resendButton()).toBeDisabled();
-    expect(screen.getByText(/Resend available in/)).toBeInTheDocument();
     // Real time elapsed between the first reading and the restored one; the restored
     // countdown shows less time remaining, not the same fresh minutes.
-    expect(restoredTimer).toMatch(/Token expires in: \d{2}:\d{2}/);
-    expect(restoredTimer).not.toBe(firstTimer);
+    expect(restoredResendWait).toMatch(/Resend available in \d{2}:\d{2}/);
+    expect(restoredResendWait).not.toBe(firstResendWait);
     // And between the two pre-refresh readings too.
-    expect(beforeRefreshTimer).not.toBe(firstTimer);
+    expect(beforeRefreshResendWait).not.toBe(firstResendWait);
   });
 
   it('shows an expired token as expired while the resend is still cooling down', async () => {
@@ -228,15 +227,14 @@ describe('verification-pending sign-in', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Verification Pending' })).toBeInTheDocument();
     });
-    expect(screen.getByText(/Token expires in: 00:0[12]/)).toBeInTheDocument();
 
     await waitFor(
       () => {
-        expect(screen.getByText('Token expired.')).toBeInTheDocument();
+        expect(screen.getByText('The link has expired.')).toBeInTheDocument();
       },
       { timeout: 4000 },
     );
-    // The cooldown (300s) outlives the token here, so no "request a new one now" claim and
+    // The cooldown (900s) outlives the token here, so no "request a new one now" claim and
     // the button stays locked under its own countdown.
     expect(screen.queryByText(/You can request a new one now/)).not.toBeInTheDocument();
     expect(resendButton()).toBeDisabled();
@@ -260,11 +258,10 @@ describe('verification-pending sign-in', () => {
     });
 
     await waitFor(() => {
-      // The resend minted a fresh five-minute token and recharged the cooldown.
-      expect(screen.getByText(/Token expires in: 1[45]:\d{2}/)).toBeInTheDocument();
+      // The resend minted a fresh token and recharged the cooldown.
+      expect(screen.getByText(/Resend available in 1[45]:\d{2}\./)).toBeInTheDocument();
     });
     expect(resendButton()).toBeDisabled();
-    expect(screen.getByText(/Resend available in 0[45]:\d{2}\./)).toBeInTheDocument();
 
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe('http://localhost:8001/auth/login/users/magic');
@@ -295,24 +292,110 @@ describe('verification-pending sign-in', () => {
     expect(calls[0].regno).toBe('shared-reg');
   });
 
-  it('changes the registration number: clears the pending state and returns to the input screen', async () => {
+  it('holds the login form on the exterior while the lid is opening', async () => {
     stubFetch([{ ok: true, status: 200, body: successBody() }]);
     renderPage();
 
     await typeAndSubmit('shared-reg');
 
     await waitFor(() => {
-      expect(window.localStorage.getItem(PENDING_KEY)).not.toBeNull();
+      expect(document.querySelector('.heart-locket-stage')).toHaveAttribute(
+        'data-locket-state',
+        'opening',
+      );
     });
-    expect(screen.getByRole('heading', { name: 'Verification Pending' })).toBeInTheDocument();
+    // The form is still painted on the exterior while the hinge moves, though the
+    // inaccessible face is made inert so its controls cannot submit a second request.
+    expect(screen.getByText(/enter confessit|generating link/i)).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(document.querySelector('.heart-locket-stage')).toHaveAttribute(
+        'data-locket-state',
+        'open',
+      );
+    });
+    expect(screen.queryByRole('button', { name: /enter confessit/i })).not.toBeInTheDocument();
+  });
+
+  it('settles the locket immediately when reduced motion is preferred', async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes('prefers-reduced-motion'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    try {
+      stubFetch([{ ok: true, status: 200, body: successBody() }]);
+      renderPage();
+
+      await typeAndSubmit('shared-reg');
+
+      await waitFor(() => {
+        expect(document.querySelector('.heart-locket-stage')).toHaveAttribute(
+          'data-locket-state',
+          'open',
+        );
+      });
+
+      await act(async () => {
+        screen.getByRole('button', { name: /change registration number/i }).click();
+      });
+
+      await waitFor(() => {
+        expect(document.querySelector('.heart-locket-stage')).toHaveAttribute(
+          'data-locket-state',
+          'closed',
+        );
+      });
+      expect(screen.getByRole('heading', { name: 'ConfessIt' })).toBeInTheDocument();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it('changes the registration number: closes first, then clears the pending state', async () => {
+    stubFetch([{ ok: true, status: 200, body: successBody() }]);
+    renderPage();
+
+    await typeAndSubmit('shared-reg');
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Verification Pending' })).toBeInTheDocument();
+      expect(document.querySelector('.heart-locket-stage')).toHaveAttribute(
+        'data-locket-state',
+        'open',
+      );
+    });
+    expect(window.localStorage.getItem(PENDING_KEY)).not.toBeNull();
 
     await act(async () => {
-      screen.getByRole('button', { name: /wrong number\? change registration number/i }).click();
+      screen.getByRole('button', { name: /change registration number/i }).click();
     });
 
-    expect(screen.getByRole('heading', { name: 'ConfessIt' })).toBeInTheDocument();
+    // The lid is still closing: verification content stays mounted, and the login screen
+    // has not been restored yet.
+    expect(document.querySelector('.heart-locket-stage')).toHaveAttribute(
+      'data-locket-state',
+      'closing',
+    );
+    expect(screen.getByText('Verification Pending')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'ConfessIt' })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'ConfessIt' })).toBeInTheDocument();
+    });
     expect(screen.queryByRole('heading', { name: 'Verification Pending' })).not.toBeInTheDocument();
-    expect(screen.queryByText(/Token expires in|Resend available in/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Resend available in/)).not.toBeInTheDocument();
     expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+    expect(document.querySelector('.heart-locket-stage')).toHaveAttribute(
+      'data-locket-state',
+      'closed',
+    );
   });
 });

@@ -12,9 +12,9 @@ tests pin is the rest of the contract:
 * the login response itself never varies with whether the registration number exists.
 
 Time is faked rather than waited out: the rate limiter reads its clock through one
-function, and the fixtures below replace it so a five-minute window costs no five
-minutes. Token expiry is arranged by backdating the stored row, which is the same state
-a real token reaches by waiting.
+function, and the fixtures below replace it so a configured cooldown window costs no
+wall-clock time. Token expiry is arranged by backdating the stored row, which is the
+same state a real token reaches by waiting.
 """
 
 import contextlib

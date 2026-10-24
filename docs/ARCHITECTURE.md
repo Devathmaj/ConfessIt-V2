@@ -354,7 +354,8 @@ Startup performs, in order:
 2. Acquire the process-wide PostgreSQL client and wait for connectivity.
 3. Validate Cloudinary configuration; love-note image delivery must be private.
 4. Validate the chat encryption key configuration.
-5. Converge the database schema under the schema advisory lock.
+5. Apply the Alembic migration chain to `head` under the schema advisory lock,
+   after refusing a legacy plaintext chat schema.
 6. Seed the Couple Questionnaire question bank idempotently.
 7. Ensure current game sessions exist, using the same idempotent reset path as cron.
 8. Check whether a Trivia Drop question is live or scheduled and notify staff if not.
@@ -418,7 +419,7 @@ There is no separate repository layer. Services use SQLAlchemy sessions directly
 because many operations depend on transaction-scoped locks, conditional updates, and
 savepoints that a generic repository would obscure.
 
-### 6.5 Database access and schema convergence
+### 6.5 Database access and schema migrations
 
 `app/postgres.py` owns one process-wide engine per process and provides SQLAlchemy
 sessions. Key properties:
@@ -429,27 +430,41 @@ sessions. Key properties:
 - `pool_pre_ping` avoids handing out stale sockets.
 - `SET LOCAL statement_timeout` is used inside each transaction because Azure
   PgBouncer rejects it as a startup option.
-- A separate `NullPool` connection holds the schema-init advisory lock.
+- A separate `NullPool` connection holds the schema-init advisory lock, so booting
+  workers and one-shot bootstraps cannot apply migrations concurrently.
 
-There is no Alembic. Schema convergence happens at boot through `PostgresClient.initialize()`:
+Schema is versioned with Alembic (`backend/alembic.ini`, `backend/migrations`).
+`PostgresClient.initialize()` runs this sequence under the advisory lock:
 
-- `create_all` creates missing tables;
-- missing columns are added;
-- retired columns are dropped from a named list;
-- model-declared unique indexes are added;
-- CHECK constraints are added `NOT VALID` and superseded families are dropped;
-- `pg_trgm` GIN indexes are installed best-effort;
-- `vector` is installed and an HNSW cosine index is attempted;
-- NOT NULL constraints are tightened with a regno-derived placeholder backfill where
-  required;
-- widened columns are altered;
-- session deadlines and staff notification preferences are backfilled;
-- legacy game tables converge to the current session lifecycle;
-- Trivia Drop's single-active-question rule is installed;
-- automated report source columns and partial unique indexes converge.
+1. `assert_no_legacy_plaintext_chat_schema()` refuses a database whose `messages`
+   or `case_closed_messages` table still has a plaintext `body` column. The
+   documented reset for a disposable database is
+   `scripts/recreate_chat_schema.py`.
+2. `upgrade_to_head()` inspects the `public` schema. If application tables exist
+   without an `alembic_version` revision, it verifies that every model-declared
+   table is present and stamps baseline `20261024_130741` without rewriting data.
+   A partially matching schema is rejected.
+3. Alembic upgrades to `head`. On an empty database the baseline creates the
+   extensions, tables, constraints, `pg_trgm` GIN indexes, and the pgvector HNSW
+   index; later revisions apply in order.
 
-The whole sequence is serialized by a fixed schema advisory lock. DDL that another
-worker already applied is tolerated by SQLSTATE code, not by message text.
+`migrations/env.py` targets `Base.metadata` with `compare_type=True`. Indexes
+created by raw SQL or deliberately outside the model metadata are excluded from
+autogenerate. The baseline is the schema at the moment Alembic was introduced;
+it is adopted, not replayed, for a pre-Alembic database that already has the full
+schema.
+
+Normal migration commands run from `backend/`:
+
+```bash
+alembic upgrade head
+alembic revision --autogenerate -m "describe change"
+alembic current
+```
+
+The API, `seed_db.py`, and the test-account bootstrap in `app/test.py` share the
+same `initialize()` path. The scheduler assumes the schema has already been
+brought to head by the API.
 
 ### 6.6 Authentication and authorization
 
@@ -769,7 +784,7 @@ Important properties:
 | AI generation worker | Poll loop inside each API process when enabled | Claim and run generation jobs |
 | Reset heartbeat task | Every 60 seconds inside each API process | Read the last reset outcome and publish metrics |
 | Azure Functions | HTTP request and Storage Queue message | Validate/enqueue email and send via ACS |
-| Boot convergence | API startup | Seed idempotent content, ensure sessions, initialize slots |
+| Boot initialization | API startup | Apply Alembic migrations, seed idempotent content, ensure sessions, initialize slots |
 
 The scheduler is a small one-shot process per tick, not a long-running application
 server. It builds a restricted environment, waits for the database, runs one cycle,
@@ -881,8 +896,8 @@ This prevents a busy chat from starving publishes or rate limiting.
 
 ## 8. Data model overview
 
-Tables are created and converged from SQLAlchemy models. They group into these
-domains.
+Tables are defined by SQLAlchemy models and created by the Alembic baseline and
+later revisions. They group into these domains.
 
 ### Accounts and sessions
 
@@ -1230,8 +1245,10 @@ build must never silently guess its API origin or ship development tooling.
 
 These are deliberate choices, not omissions:
 
-- No Alembic. Schema convergence is additive and serialized at boot; destructive
-  changes require an explicit one-shot script or decision.
+- Schema changes are versioned by Alembic and serialized at boot by a fixed
+  advisory lock. A pre-Alembic database is stamped at the baseline only when every
+  application table is present; legacy plaintext chat schemas fail startup instead
+  of being migrated in place.
 - PostgreSQL is external to the production Compose stack. Local development also
   expects an external database.
 - Redis is an in-memory pub/sub and rate-limit store, not durable storage.

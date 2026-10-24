@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="500" viewBox="0 0 860 500" fill="none" role="img" aria-labelledby="title desc">
+<title id="title">ConfessIt heart locket — open state reference</title>
+<desc id="desc">A reference composition showing the velvet-lined lid on the left and the stationary base on the right. The base center is left clear for a live verification interface.</desc>
+<defs>
+    <linearGradient id="outerGold" x1="58" y1="44" x2="440" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF0E5"/><stop offset=".14" stop-color="#DDA09A"/><stop offset=".3" stop-color="#8F4654"/><stop offset=".48" stop-color="#F9D6C2"/><stop offset=".66" stop-color="#B86B72"/><stop offset=".84" stop-color="#F4C7B5"/><stop offset="1" stop-color="#8F4855"/>
+    </linearGradient>
+    <linearGradient id="innerGold" x1="103" y1="91" x2="416" y2="414" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF1E5"/><stop offset=".25" stop-color="#B96C72"/><stop offset=".5" stop-color="#F4C8B7"/><stop offset=".75" stop-color="#994D5A"/><stop offset="1" stop-color="#FFE0CB"/>
+    </linearGradient>
+    <linearGradient id="velvet" x1="126" y1="105" x2="390" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6E3446"/><stop offset=".34" stop-color="#4B2534"/><stop offset=".68" stop-color="#351A28"/><stop offset="1" stop-color="#24131E"/>
+    </linearGradient>
+    <radialGradient id="velvetGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(223 180) rotate(58) scale(260 225)">
+      <stop stop-color="#C9788B" stop-opacity=".45"/><stop offset="1" stop-color="#C9788B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="silk" x1="130" y1="135" x2="370" y2="389" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE2D7"/><stop offset=".28" stop-color="#F1B5B3"/><stop offset=".58" stop-color="#C47A86"/><stop offset="1" stop-color="#71364A"/>
+    </linearGradient>
+    <linearGradient id="lineGlow" x1="121" y1="115" x2="386" y2="389" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF0E7" stop-opacity=".85"/><stop offset="1" stop-color="#C77C89" stop-opacity=".3"/>
+    </linearGradient>
+    <filter id="drop" x="15" y="19" width="482" height="484" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="panelShadow" x="111" y="140" width="290" height="210" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="7"/></filter>
+    <clipPath id="heartClip"><path d="M256 430C224 402 65 299 65 185C65 91 176 37 256 131C336 37 447 91 447 185C447 299 288 402 256 430Z"/></clipPath>
+  
+ <linearGradient id="bg" x1="0" y1="0" x2="860" y2="500" gradientUnits="userSpaceOnUse"><stop stop-color="#512831"/><stop offset="1" stop-color="#28151E"/></linearGradient>
+ <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(430 238) rotate(90) scale(260 390)"><stop stop-color="#A95467" stop-opacity=".24"/><stop offset="1" stop-color="#A95467" stop-opacity="0"/></radialGradient>
+ <filter id="shadow" x="12" y="12" width="836" height="476" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="12"/></filter>
+</defs>
+<rect width="860" height="500" rx="26" fill="url(#bg)"/>
+<rect width="860" height="500" rx="26" fill="url(#glow)"/>
+<ellipse cx="430" cy="414" rx="340" ry="38" fill="#0D080C" opacity=".55" filter="url(#shadow)"/>
+<!-- Open lid interior, mirrored so the hinge edge faces the stationary half. -->
+<g transform="translate(474 42) scale(-0.86 0.86)">
+  <path d="M256 449C216 416 51 309 51 186C51 78 175 18 256 117C337 18 461 78 461 186C461 309 296 416 256 449Z" fill="#170D13" opacity=".35" filter="url(#drop)"/>
+  <path d="M256 430C224 402 65 299 65 185C65 91 176 37 256 131C336 37 447 91 447 185C447 299 288 402 256 430Z" fill="url(#outerGold)" stroke="#FFE9DB" stroke-width="2.4"/>
+  <path d="M256 416C226 389 81 294 81 188C81 103 180 55 256 145C332 55 431 103 431 188C431 294 286 389 256 416Z" fill="#8C4856" opacity=".92"/>
+  <path d="M256 405C227 380 96 289 96 190C96 119 184 73 256 160C328 73 416 119 416 190C416 289 285 380 256 405Z" fill="url(#velvet)" stroke="url(#innerGold)" stroke-width="5"/>
+  <g clip-path="url(#heartClip)">
+    <path d="M79 143C112 73 177 66 228 111C175 111 128 145 108 199C92 244 108 286 139 323C81 275 59 208 79 143Z" fill="url(#silk)" opacity=".24"/>
+    <path d="M387 126C418 160 428 202 410 246C397 278 376 307 349 330" stroke="#FFF0E6" stroke-opacity=".18" stroke-width="10" stroke-linecap="round"/>
+  </g>
+  <path d="M256 393C225 367 110 281 110 192C110 133 185 94 256 178C327 94 402 133 402 192C402 281 287 367 256 393Z" stroke="url(#lineGlow)" stroke-width="1.7"/>
+  <path d="M256 385C228 361 121 280 121 194C121 145 187 108 256 188C325 108 391 145 391 194C391 280 284 361 256 385Z" stroke="#F9CFC6" stroke-opacity=".24" stroke-width="1.2"/>
+  <!-- Fine ornamental sweeps around an intentionally open center. -->
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M150 159C157 136 179 126 199 139C190 140 180 147 176 158M362 159C355 136 333 126 313 139C322 140 332 147 336 158" stroke="#FFE7DA" stroke-opacity=".65" stroke-width="1.8"/>
+    <path d="M133 188C143 173 156 166 172 168M379 188C369 173 356 166 340 168" stroke="#D58B94" stroke-opacity=".8" stroke-width="1.8"/>
+    <path d="M162 302C186 328 212 347 231 357M350 302C326 328 300 347 281 357" stroke="#F9D9CF" stroke-opacity=".3" stroke-width="2"/>
+  </g>
+  <!-- Engraved heart medallion: the inner side of the lid, distinct from the gem on the front. -->
+  <path d="M256 278C249 271 228 256 228 239C228 224 245 218 256 233C267 218 284 224 284 239C284 256 263 271 256 278Z" fill="#311823" fill-opacity=".5" stroke="url(#innerGold)" stroke-width="2.2"/>
+  <path d="M256 269C250 263 236 252 236 240C236 231 247 229 256 240C265 229 276 231 276 240C276 252 262 263 256 269Z" fill="none" stroke="#FFE9DE" stroke-opacity=".72" stroke-width="1.4"/>
+  <circle cx="256" cy="135" r="7" fill="url(#outerGold)" stroke="#FFF0E6" stroke-width="1.5"/>
+  <circle cx="256" cy="135" r="2.3" fill="#8E4755"/>
+  <path d="M78 184C70 190 68 200 72 210C75 218 81 222 90 222L98 208L93 190Z" fill="url(#outerGold)" stroke="#FFF0E6" stroke-width="1.4"/>
+  <circle cx="83" cy="204" r="3" fill="#813C4D" stroke="#FFE4D7" stroke-width="1.1"/>
+  <path d="M109 119C139 80 187 72 222 99" stroke="#FFFFFF" stroke-opacity=".3" stroke-width="2" stroke-linecap="round"/>
+
+</g>
+<!-- Stationary base interior. -->
+<g transform="translate(387 42) scale(0.86 0.86)">
+  <path d="M256 450C216 416 51 309 51 186C51 78 175 18 256 117C337 18 461 78 461 186C461 309 296 416 256 450Z" fill="#170D13" opacity=".36" filter="url(#drop)"/>
+  <path d="M256 430C224 402 65 299 65 185C65 91 176 37 256 131C336 37 447 91 447 185C447 299 288 402 256 430Z" fill="url(#outerGold)" stroke="#FFEBDD" stroke-width="2.6"/>
+  <path d="M256 416C226 389 81 294 81 188C81 103 180 55 256 145C332 55 431 103 431 188C431 294 286 389 256 416Z" fill="#7E3C4D"/>
+  <path d="M256 405C227 380 96 289 96 190C96 119 184 73 256 160C328 73 416 119 416 190C416 289 285 380 256 405Z" fill="url(#velvet)" stroke="url(#innerGold)" stroke-width="5"/>
+  <g clip-path="url(#heartClip)">
+    <rect x="70" y="66" width="372" height="375" fill="url(#velvetGlow)"/>
+    <path d="M78 144C114 78 180 67 228 112C173 112 126 151 110 206C97 251 113 290 140 321C82 277 61 209 78 144Z" fill="url(#silk)" opacity=".11"/>
+    <path d="M380 115C420 153 430 207 411 249C397 282 375 307 351 328" stroke="#FFE8DF" stroke-opacity=".12" stroke-width="12" stroke-linecap="round"/>
+  </g>
+  <path d="M256 400C224 374 98 284 98 190C98 126 183 83 256 168C329 83 414 126 414 190C414 284 288 374 256 400Z" stroke="url(#lineGlow)" stroke-width="1.8"/>
+  <path d="M256 391C226 365 108 280 108 193C108 136 184 95 256 178C328 95 404 136 404 193C404 280 286 365 256 391Z" stroke="#F1B4BC" stroke-opacity=".28" stroke-width="1.2"/>
+  <!-- Soft inset under the live React verification card; this SVG contains no interface text. -->
+  <rect x="132" y="155" width="248" height="168" rx="22" fill="#160D13" opacity=".44" filter="url(#panelShadow)"/>
+  <rect x="136" y="155" width="240" height="168" rx="22" fill="#2D1721" fill-opacity=".93" stroke="url(#innerGold)" stroke-opacity=".9" stroke-width="2"/>
+  <rect x="144" y="163" width="224" height="152" rx="16" fill="none" stroke="#F6C9C0" stroke-opacity=".22" stroke-width="1.2"/>
+  <path d="M158 174C177 165 195 165 212 168" stroke="#FFF0E7" stroke-opacity=".16" stroke-width="2" stroke-linecap="round"/>
+  <path d="M256 132C249 132 245 138 247 143C249 148 254 150 256 150C258 150 263 148 265 143C267 138 263 132 256 132Z" fill="url(#outerGold)" stroke="#FFF0E5" stroke-width="1.3"/>
+  <circle cx="256" cy="141" r="2.5" fill="#9A4D5A"/>
+  <!-- Hinge barrel on the left edge. -->
+  <g>
+    <path d="M73 181C64 188 62 200 67 211C70 218 77 224 86 225L96 211L91 188Z" fill="url(#outerGold)" stroke="#FFEBDD" stroke-width="1.6"/>
+    <path d="M73 190C70 197 72 207 78 214" stroke="#FFF2E8" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="80" cy="204" r="3" fill="#733246" stroke="#F7D3C7" stroke-width="1"/>
+  </g>
+  <circle cx="256" cy="372" r="3.2" fill="#FFE5D9" opacity=".75"/>
+
+</g>
+<!-- Central hinge spine and hinge knuckles. -->
+<g>
+ <path d="M420 176C414 181 413 190 416 197C418 202 422 205 427 205C432 205 436 202 438 197C441 190 440 181 434 176Z" fill="#DFA7A0" stroke="#FFF0E3" stroke-width="1.5"/>
+ <path d="M420 215C414 220 413 229 416 236C418 241 422 244 427 244C432 244 436 241 438 236C441 229 440 220 434 215Z" fill="#B96D76" stroke="#F9D9CA" stroke-width="1.5"/>
+ <path d="M426 182V199M426 221V238" stroke="#FFF0E5" stroke-opacity=".75" stroke-width="1.6" stroke-linecap="round"/>
+</g>
+<text x="240" y="464" text-anchor="middle" fill="#F9D8D6" font-family="Georgia, serif" font-size="15" letter-spacing="2">INSIDE LID</text>
+<text x="600" y="464" text-anchor="middle" fill="#F9D8D6" font-family="Georgia, serif" font-size="15" letter-spacing="2">VERIFICATION</text>
+</svg>

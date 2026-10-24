@@ -120,11 +120,11 @@ def _login(browser, regno):
 def clock(monkeypatch):
     """The limiter's clock, under the test's control.
 
-    Every window here is five minutes or an hour of wall time, and none of them is
-    waited out: the limiter reads ``now`` through one function, this fixture replaces
-    that function, and ``advance`` moves it. The application's other clocks (token
-    expiry, row timestamps) deliberately keep real time -- nothing below depends on
-    them shifting.
+    Every configured account cooldown, the five-minute client/IP windows, and the
+    hourly long account window are never waited out: the limiter reads ``now`` through
+    one function, this fixture replaces that function, and ``advance`` moves it. The
+    application's other clocks (token expiry, row timestamps) deliberately keep real
+    time -- nothing below depends on them shifting.
     """
 
     class _Clock:
@@ -141,6 +141,11 @@ def clock(monkeypatch):
 # ----------------------------------------------------------------------
 # Account cooldown
 # ----------------------------------------------------------------------
+
+
+def test_the_account_cooldown_matches_the_magic_link_lifetime():
+    """A resend becomes available only as the link it would replace expires."""
+    assert settings.LOGIN_ACCOUNT_COOLDOWN_SECONDS == settings.LOGIN_TOKEN_EXPIRE_MINUTES * 60
 
 
 def test_one_login_request_per_account_per_cooldown_window(db):
@@ -176,12 +181,15 @@ def test_the_account_cooldown_lifts_when_its_window_elapses(db, clock):
     assert _token_count(db) == 2
 
 
-def test_the_long_account_window_bounds_sustained_requesting(db, clock):
+def test_the_long_account_window_bounds_sustained_requesting(db, clock, monkeypatch):
     """The short window alone still allows one link every window, forever.
 
     The wider, separately configured window is what caps the total: five links an hour
-    is a drip, not a stream, however patiently the short windows are spaced.
+    is a drip, not a stream, however patiently the short windows are spaced. The
+    production short window (the 15-minute link lifetime) cannot fit five requests
+    inside the hourly window, so shrink it here to isolate this cap.
     """
+    monkeypatch.setattr(settings, "LOGIN_ACCOUNT_COOLDOWN_SECONDS", 60)
     _seed_user(db, "steady-user")
     browser = _browser()
 
