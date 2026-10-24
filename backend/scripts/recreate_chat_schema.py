@@ -46,6 +46,7 @@ def main() -> int:
     from sqlalchemy.engine import make_url
 
     from app.config import settings
+    from app.db_models import Base
     from app.postgres import PostgresClient
 
     if args.database_url:
@@ -70,8 +71,21 @@ def main() -> int:
         with client.engine.begin() as connection:
             for table in CHAT_TABLES:
                 connection.execute(text(f'DROP TABLE IF EXISTS "{table}" CASCADE'))
-        # Recreate tables from current models and handle additive schema changes.
-        client.initialize()
+            # The Alembic baseline is already stamped at head, so recreate only the
+            # tables this script dropped, in dependency order.
+            dropped_tables = [
+                table for table in Base.metadata.sorted_tables if table.name in CHAT_TABLES
+            ]
+            Base.metadata.create_all(bind=connection, tables=dropped_tables, checkfirst=True)
+        client.apply_trgm_indexes()
+        with client.engine.begin() as connection:
+            connection.execute(
+                text(
+                    'CREATE UNIQUE INDEX IF NOT EXISTS "uq_message_reports_automated" '
+                    'ON "message_reports" ("message_id") '
+                    "WHERE source = 'azure_content_safety'"
+                )
+            )
     finally:
         client.close()
     print("[chat-schema-reset] complete: encrypted chat schema installed.", flush=True)

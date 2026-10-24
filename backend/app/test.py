@@ -103,8 +103,7 @@ def main():
     try:
         # A one-shot script owns its own engine and disposes it in the finally block.
         client = PostgresClient()
-        # The seed is how a fresh database gets its tables, so it cannot assume a booted
-        # application already created them. initialize() is a no-op on an existing schema.
+        # Apply the Alembic revisions first; this is a no-op on an existing schema.
         client.initialize()
 
         # (account_type, values) per entry. Participant fields stay on the participant row; a

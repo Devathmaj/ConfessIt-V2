@@ -27,10 +27,10 @@ def _set_transaction_statement_timeout(connection, timeout_ms: int) -> None:
     connection.exec_driver_sql(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
 
 
-# Advisory lock serialising schema convergence across workers: the convergence is a series of
-# "read the catalogue, then ALTER" steps, two booting workers would both issue ADD CONSTRAINT
-# and the loser dies on duplicate_object with a half-converged schema. The fixed key sits in a
-# range of its own (account caps are 7_240_xxx, game sessions 7_250_xxx) so no lock blocks it.
+# Advisory lock serialising Alembic startup across workers: without it two booting workers
+# would both read the version table and run the same revision, and the loser would die on a
+# duplicate object. The fixed key sits in a range of its own (account caps are 7_240_xxx,
+# game sessions 7_250_xxx) so no lock blocks it.
 SCHEMA_INIT_LOCK_KEY = 7_260_001
 
 # SQLSTATE codes treated as "somebody else got there first", read from the code rather
@@ -234,9 +234,16 @@ class PostgresClient:
         )
 
     def initialize(self) -> None:
-        """Bring the database schema in line with the models, serialised by :meth:`schema_lock` (see :data:`SCHEMA_INIT_LOCK_KEY`)."""
+        """Apply the Alembic revisions, serialised by :meth:`schema_lock` (see :data:`SCHEMA_INIT_LOCK_KEY`).
+
+        An existing database whose schema predates Alembic is stamped at the baseline
+        revision, so startup never rewrites the tables or rows it already holds.
+        """
+        from .migrations import upgrade_to_head
+
         with self.schema_lock():
-            self._converge_schema()
+            self.assert_no_legacy_plaintext_chat_schema()
+            upgrade_to_head(self.engine)
 
     @contextmanager
     def schema_lock(self):
@@ -272,50 +279,6 @@ class PostgresClient:
         finally:
             connection.close()
 
-    def _converge_schema(self) -> None:
-        """The convergence sequence itself. Serialised by :meth:`schema_lock`."""
-        # Refuse to boot against the old plaintext chat tables: the encrypted schema drops
-        # the body column, which create_all cannot apply to an existing table. There is no
-        # Alembic; the migration is the destructive one-shot scripts/recreate_chat_schema.py.
-        self.assert_no_legacy_plaintext_chat_schema()
-        # pgvector must exist before any vector(1536) table is created, else create_all
-        # fails on a fresh database with "type vector does not exist".
-        self.apply_vector_extension()
-        self._create_tables()
-        # Columns before constraints: a CHECK naming a column only the models declare is
-        # refused until the column exists; adding columns first lets a partially-migrated
-        # database converge in one boot.
-        self.apply_missing_columns()
-        self.apply_retired_columns()
-        self.apply_unique_indexes()
-        # The refresh path's stale-copy lookup reads this column on every refusal.
-        self.apply_refresh_replay_index()
-        self.apply_check_constraints()
-        # Needs the extension installed first, and nothing else depends on it, so it
-        # runs with the other additive DDL rather than in table-creation order.
-        self.apply_trgm_indexes()
-        # HNSW cosine index for confession embeddings where the server supports
-        # it; exact search remains correct without it on a small corpus.
-        self.apply_embedding_vector_index()
-        # NOT NULL last, and for the same ordering reason: it needs the columns to exist, and
-        # unlike the others it may have to *rewrite rows* before it can be applied.
-        self.apply_not_null_constraints()
-        # After the columns exist and their nullability is settled: a type change needs
-        # the column present, and widening never invalidates rows.
-        self.apply_widened_columns()
-        # After the columns exist, so it can name session_expires_at.
-        self.backfill_session_deadlines()
-        # Repairs staff rows that predate the preference after_insert hook and any raw-SQL writes.
-        self.backfill_staff_notification_preferences()
-        # After every additive step, so the session lifecycle converges on old databases.
-        self.apply_game_session_convergence()
-        # Trivia Drop's single-active-question rule, for the same reason: the
-        # table is new, but the index is the backstop behind the advisory lock.
-        self.apply_trivia_drop_convergence()
-        # Automated confession moderation (Batch 1): system-actor reports reuse
-        # the reports table with a nullable reporter and a source column.
-        self.apply_report_source_convergence()
-
     def _create_tables(self) -> None:
         """Create the tables the models declare, retrying once on a concurrent worker's ``duplicate_table`` (a rolling deploy races the schema lock)."""
         try:
@@ -329,7 +292,7 @@ class PostgresClient:
             Base.metadata.create_all(self.engine)
 
     def assert_no_legacy_plaintext_chat_schema(self) -> None:
-        """Fail clearly when a legacy plaintext chat schema is still installed (no convergence step can migrate it; point the operator at the one-shot reset)."""
+        """Fail clearly when a legacy plaintext chat schema is still installed (no revision migrates it; point the operator at the one-shot reset)."""
         with self.engine.connect() as connection:
             legacy = connection.execute(
                 text(

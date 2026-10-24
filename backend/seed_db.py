@@ -224,8 +224,7 @@ def seed_database() -> None:
     # application shares the singleton from app.postgres.
     client = PostgresClient()
     try:
-        # The seed is how a fresh database gets its tables, so it cannot assume a booted
-        # application already created them. This is a no-op against an existing schema.
+        # Apply the Alembic revisions first; this is a no-op against an existing schema.
         client.initialize()
 
         accounts: list[tuple[str, dict]] = [
