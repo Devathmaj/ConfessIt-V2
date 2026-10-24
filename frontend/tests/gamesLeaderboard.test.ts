@@ -8,6 +8,8 @@ import {
   gameCompetitionType,
   gamesForCompetition,
   lastCompletedDayAnchor,
+  previousPeriodAnchor,
+  previousPeriodRangeLabel,
   todayAnchor,
 } from '@/lib/gamesLeaderboard';
 
@@ -86,6 +88,21 @@ describe('gamesLeaderboard: the competition vocabulary', () => {
 
   it('anchors boards to a UTC calendar day', () => {
     expect(todayAnchor()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('anchors the previous window without overflowing month ends', () => {
+    expect(previousPeriodAnchor('weekly', '2026-10-08')).toBe('2026-10-01');
+    expect(previousPeriodAnchor('monthly', '2026-03-31')).toBe('2026-02-01');
+    expect(previousPeriodAnchor('monthly', '2026-01-15')).toBe('2025-12-01');
+    // Daily already shows yesterday's result; no previous window is derived.
+    expect(previousPeriodAnchor('daily', '2026-10-08')).toBe('2026-10-08');
+  });
+
+  it('labels the previous window as a closed UTC range', () => {
+    expect(previousPeriodRangeLabel('weekly', '2026-10-08')).toContain('Sep');
+    expect(previousPeriodRangeLabel('weekly', '2026-10-08')).toContain('Oct');
+    expect(previousPeriodRangeLabel('monthly', '2026-03-31')).toContain('Feb');
+    expect(previousPeriodRangeLabel('daily', '2026-10-08')).toBeNull();
   });
 
   it('opens daily boards on the last completed UTC day', () => {

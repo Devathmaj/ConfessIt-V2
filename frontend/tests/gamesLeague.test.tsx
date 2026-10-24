@@ -3,7 +3,11 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthContext, type User } from '@/contexts/AuthContext';
-import { lastCompletedDayAnchor, todayAnchor } from '@/lib/gamesLeaderboard';
+import {
+  lastCompletedDayAnchor,
+  previousPeriodAnchor,
+  todayAnchor,
+} from '@/lib/gamesLeaderboard';
 import { GamesDashboardPage } from '@/pages/GamesDashboardPage';
 import { GamesLeaderboardPage } from '@/pages/GamesLeaderboardPage';
 import {
@@ -103,7 +107,13 @@ const renderLeaderboard = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getIndividualLeaderboard).mockResolvedValue(individualBoard());
+  // The page adds a previous-window read (limit 3) for weekly/monthly boards;
+  // keep that empty unless a test supplies settled rows of its own.
+  vi.mocked(getIndividualLeaderboard).mockImplementation(async (query = {}) =>
+    query.limit === 3 && query.anchor !== undefined
+      ? { ...individualBoard(), total: 0, entries: [] }
+      : individualBoard(),
+  );
   vi.mocked(getCouplesLeaderboard).mockResolvedValue({
     competition_type: 'couple',
     period: 'weekly',
@@ -177,9 +187,79 @@ describe('GamesLeaderboardPage: the server-backed board', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Weekly' }));
     await waitFor(() =>
-      expect(getIndividualLeaderboard).toHaveBeenLastCalledWith(
+      expect(getIndividualLeaderboard).toHaveBeenCalledWith(
         expect.objectContaining({ period: 'weekly', anchor: todayAnchor() }),
       ),
+    );
+  });
+
+  it('shows the previous week of a live weekly board', async () => {
+    vi.mocked(getIndividualLeaderboard).mockImplementation(async (query = {}) =>
+      query.limit === 3
+        ? {
+            ...individualBoard(),
+            total: 3,
+            entries: [
+              {
+                rank: 1,
+                user_id: 'prev-1',
+                display_name: 'Pat',
+                score: 180,
+                native: {},
+                is_featured: false,
+                opportunities_played: 4,
+              },
+              {
+                rank: 2,
+                user_id: 'prev-2',
+                display_name: 'Quinn',
+                score: 120,
+                native: {},
+                is_featured: false,
+                opportunities_played: 3,
+              },
+              {
+                rank: 3,
+                user_id: 'prev-3',
+                display_name: 'Rae',
+                score: 60,
+                native: {},
+                is_featured: false,
+                opportunities_played: 2,
+              },
+            ],
+          }
+        : individualBoard(),
+    );
+    renderLeaderboard();
+
+    expect(await screen.findByText("Previous week's top 3")).toBeInTheDocument();
+    expect(screen.getByText('Pat')).toBeInTheDocument();
+    expect(screen.getByText('Quinn')).toBeInTheDocument();
+    expect(screen.getByText('Rae')).toBeInTheDocument();
+    expect(getIndividualLeaderboard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        period: 'weekly',
+        anchor: previousPeriodAnchor('weekly', todayAnchor()),
+        skip: 0,
+        limit: 3,
+      }),
+    );
+  });
+
+  it('does not add a previous card to daily boards', async () => {
+    renderLeaderboard();
+    await screen.findByText('Ada');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Daily' }));
+
+    await waitFor(() =>
+      expect(getIndividualLeaderboard).toHaveBeenCalledWith(
+        expect.objectContaining({ period: 'daily' }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText(/previous (week|month)/i)).not.toBeInTheDocument(),
     );
   });
 
@@ -203,26 +283,29 @@ describe('GamesLeaderboardPage: the server-backed board', () => {
   });
 
   it('switches competitions and re-queries the server', async () => {
-    vi.mocked(getCouplesLeaderboard).mockResolvedValue({
+    vi.mocked(getCouplesLeaderboard).mockImplementation(async (query = {}) => ({
       competition_type: 'couple',
       period: 'weekly',
       game_id: null,
       opportunity_count: 1,
-      total: 1,
-      entries: [
-        {
-          rank: 1,
-          member_a_id: 'a',
-          member_b_id: 'b',
-          member_a_name: 'Al',
-          member_b_name: 'Bo',
-          score: 100,
-          native: {},
-          is_featured: false,
-          opportunities_played: 1,
-        },
-      ],
-    });
+      total: query.limit === 3 ? 0 : 1,
+      entries:
+        query.limit === 3
+          ? []
+          : [
+              {
+                rank: 1,
+                member_a_id: 'a',
+                member_b_id: 'b',
+                member_a_name: 'Al',
+                member_b_name: 'Bo',
+                score: 100,
+                native: {},
+                is_featured: false,
+                opportunities_played: 1,
+              },
+            ],
+    }));
     renderLeaderboard();
     await screen.findByText('Ada');
 
@@ -239,7 +322,11 @@ describe('GamesLeaderboardPage: the server-backed board', () => {
     renderLeaderboard();
 
     expect(await screen.findByText('Standings are unavailable')).toBeInTheDocument();
-    vi.mocked(getIndividualLeaderboard).mockResolvedValue(individualBoard());
+    vi.mocked(getIndividualLeaderboard).mockImplementation(async (query = {}) =>
+      query.limit === 3 && query.anchor !== undefined
+        ? { ...individualBoard(), total: 0, entries: [] }
+        : individualBoard(),
+    );
     fireEvent.click(screen.getByRole('button', { name: /try again/i }));
     expect(await screen.findByText('Ada')).toBeInTheDocument();
   });

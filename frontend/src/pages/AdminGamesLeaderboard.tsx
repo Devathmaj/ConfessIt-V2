@@ -20,6 +20,8 @@ import {
   entryDisplayName,
   gamesForCompetition,
   lastCompletedDayAnchor,
+  previousPeriodAnchor,
+  previousPeriodRangeLabel,
   todayAnchor,
   type LeagueCompetitionType,
   type LeagueCoupleEntry,
@@ -69,6 +71,9 @@ export const AdminGamesLeaderboard = () => {
   }));
   const anchor = anchors[period];
   const [entries, setEntries] = useState<BoardEntry[]>([]);
+  // Weekly and monthly windows roll over to a fresh board; keep the settled
+  // top three of the window before it so operators can read the final table.
+  const [previousEntries, setPreviousEntries] = useState<BoardEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [opportunityCount, setOpportunityCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,8 +97,17 @@ export const AdminGamesLeaderboard = () => {
         setLoadingMore(true);
       } else {
         setLoading(true);
+        setPreviousEntries([]);
       }
       setError(null);
+      // A game view swaps to its metric boards, so the points window's
+      // previous top three is only read for the combined board.
+      const previousQuery =
+        !append &&
+        !gameSelected &&
+        (period === 'weekly' || period === 'monthly')
+          ? { period, anchor: previousPeriodAnchor(period, anchor), skip: 0, limit: 3 }
+          : null;
       try {
         const query = {
           period,
@@ -102,13 +116,21 @@ export const AdminGamesLeaderboard = () => {
           skip: offset,
           limit: PAGE_SIZE,
         };
-        const board: LeagueIndividualBoard | LeagueCoupleBoard =
+        const [board, previous] = await Promise.all([
           competition === 'couple'
-            ? await getAdminCouplesLeaderboard(query)
-            : await getAdminIndividualLeaderboard(query);
+            ? getAdminCouplesLeaderboard(query)
+            : getAdminIndividualLeaderboard(query),
+          previousQuery
+            ? (competition === 'couple'
+                ? getAdminCouplesLeaderboard(previousQuery)
+                : getAdminIndividualLeaderboard(previousQuery)
+              ).catch(() => null)
+            : Promise.resolve(null),
+        ]);
         setEntries((prev) => (append ? [...prev, ...board.entries] : [...board.entries]));
         setTotal(board.total);
         setOpportunityCount(board.opportunity_count ?? null);
+        if (!append) setPreviousEntries(previous?.entries ?? []);
       } catch (fetchError) {
         if (!append) setEntries([]);
         setError(describeApiError(fetchError, 'Could not load the standings.'));
@@ -117,7 +139,7 @@ export const AdminGamesLeaderboard = () => {
         setLoadingMore(false);
       }
     },
-    [competition, period, gameId, anchor],
+    [competition, period, gameId, anchor, gameSelected],
   );
 
   useEffect(() => {
@@ -131,6 +153,8 @@ export const AdminGamesLeaderboard = () => {
       : 0;
   const featuredRows = entries.filter((row) => row.is_featured).length;
   const canLoadMore = entries.length < total;
+  const hasPreviousPeriod = period === 'weekly' || period === 'monthly';
+  const previousRange = hasPreviousPeriod ? previousPeriodRangeLabel(period, anchor) : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -308,50 +332,12 @@ export const AdminGamesLeaderboard = () => {
             </CardContent>
           </Card>
         ) : (
-          entries.map((row) => {
-            const key = isCoupleEntry(row)
-              ? `${row.member_a_id}:${row.member_b_id}`
-              : row.user_id;
-            return (
-              <Card key={key} className="rounded-2xl border-border/60 bg-card/70">
-                <CardContent className="flex flex-wrap items-center gap-3 p-3 sm:p-4">
-                  <span className="w-7 shrink-0 text-center text-sm font-bold tabular-nums">
-                    {row.rank}
-                  </span>
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-secondary text-xs font-bold">
-                    {entryDisplayName(row)
-                      .replace(/[^a-zA-Z]/g, '')
-                      .slice(0, 2)
-                      .toUpperCase() || '??'}
-                  </span>
-
-                  <div className="min-w-0 flex-1 basis-48">
-                    <div className="flex items-center gap-2">
-                      <p className="truncate text-sm font-semibold">{entryDisplayName(row)}</p>
-                      {row.is_featured && (
-                        <Badge variant="secondary" className="shrink-0">
-                          <Zap className="h-3 w-3" />
-                          2×
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {row.opportunities_played} {row.opportunities_played === 1 ? 'event' : 'events'}
-                      {'per_game' in row && row.per_game
-                        ? ` · ${Object.entries(row.per_game)
-                            .map(([game, score]) => `${game} ${formatScore(score)}`)
-                            .join(' · ')}`
-                        : ''}
-                    </p>
-                  </div>
-
-                  <div className="shrink-0 text-right">
-                    <p className="text-base font-bold tabular-nums">{formatScore(row.score)}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })
+          entries.map((row) => (
+            <AdminLeaderboardRow
+              key={isCoupleEntry(row) ? `${row.member_a_id}:${row.member_b_id}` : row.user_id}
+              row={row}
+            />
+          ))
         )}
       </section>
 
@@ -368,10 +354,69 @@ export const AdminGamesLeaderboard = () => {
           </Button>
         </div>
       )}
+
+      {!loading && hasPreviousPeriod && previousEntries.length > 0 && (
+        <section aria-label="Previous period top 3" className="space-y-3">
+          <div>
+            <h2 className="text-base font-semibold">
+              {period === 'weekly' ? "Previous week's top 3" : "Previous month's top 3"}
+            </h2>
+            {previousRange && (
+              <p className="text-xs text-muted-foreground">{previousRange} · final standings</p>
+            )}
+          </div>
+          {previousEntries.map((row) => (
+            <AdminLeaderboardRow
+              key={isCoupleEntry(row) ? `${row.member_a_id}:${row.member_b_id}` : row.user_id}
+              row={row}
+            />
+          ))}
+        </section>
+      )}
       </>
       )}
     </div>
   );
 };
+
+const AdminLeaderboardRow = ({ row }: { row: BoardEntry }) => (
+  <Card className="rounded-2xl border-border/60 bg-card/70">
+    <CardContent className="flex flex-wrap items-center gap-3 p-3 sm:p-4">
+      <span className="w-7 shrink-0 text-center text-sm font-bold tabular-nums">
+        {row.rank}
+      </span>
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-secondary text-xs font-bold">
+        {entryDisplayName(row)
+          .replace(/[^a-zA-Z]/g, '')
+          .slice(0, 2)
+          .toUpperCase() || '??'}
+      </span>
+
+      <div className="min-w-0 flex-1 basis-48">
+        <div className="flex items-center gap-2">
+          <p className="truncate text-sm font-semibold">{entryDisplayName(row)}</p>
+          {row.is_featured && (
+            <Badge variant="secondary" className="shrink-0">
+              <Zap className="h-3 w-3" />
+              2×
+            </Badge>
+          )}
+        </div>
+        <p className="truncate text-xs text-muted-foreground">
+          {row.opportunities_played} {row.opportunities_played === 1 ? 'event' : 'events'}
+          {'per_game' in row && row.per_game
+            ? ` · ${Object.entries(row.per_game)
+                .map(([game, score]) => `${game} ${formatScore(score)}`)
+                .join(' · ')}`
+            : ''}
+        </p>
+      </div>
+
+      <div className="shrink-0 text-right">
+        <p className="text-base font-bold tabular-nums">{formatScore(row.score)}</p>
+      </div>
+    </CardContent>
+  </Card>
+);
 
 export default AdminGamesLeaderboard;

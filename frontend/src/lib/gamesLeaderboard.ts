@@ -70,6 +70,60 @@ export const entryDisplayName = (
 /** Today as UTC `YYYY-MM-DD`, the only calendar the boards speak. */
 export const todayAnchor = (): string => new Date().toISOString().slice(0, 10);
 
+const anchorFromKey = (anchor: string): Date => {
+  const [year, month, day] = anchor.split('-').map(Number);
+  return new Date(Date.UTC(year, (month ?? 1) - 1, day ?? 1));
+};
+
+const anchorFromDate = (date: Date): string => date.toISOString().slice(0, 10);
+
+const utcDateLabel = (date: Date): string =>
+  date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+/**
+ * An anchor inside the calendar window immediately before the one holding
+ * `anchor`: last week (-7 days) for weekly, last month (first day) for monthly.
+ *
+ * Weekly and monthly boards are windows, so the previous window is a settled
+ * final table once the next one opens. Returning an anchor (not bounds) keeps
+ * the request on the same calendar rules the server applies.
+ */
+export const previousPeriodAnchor = (period: LeaguePeriod, anchor: string): string => {
+  const day = anchorFromKey(anchor);
+  if (period === 'weekly') {
+    day.setUTCDate(day.getUTCDate() - 7);
+  } else if (period === 'monthly') {
+    // Move to the 1st first: subtracting a month from the 31st would overflow
+    // into the current month in the Date API.
+    day.setUTCDate(1);
+    day.setUTCMonth(day.getUTCMonth() - 1);
+  }
+  return anchorFromDate(day);
+};
+
+/** Human-readable UTC range of the window before `anchor`, e.g. "Oct 12 – Oct 18". */
+export const previousPeriodRangeLabel = (
+  period: LeaguePeriod,
+  anchor: string,
+): string | null => {
+  const day = anchorFromKey(anchor);
+  if (period === 'weekly') {
+    const monday = new Date(day);
+    monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+    const start = new Date(monday);
+    start.setUTCDate(start.getUTCDate() - 7);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 6);
+    return `${utcDateLabel(start)} – ${utcDateLabel(end)}`;
+  }
+  if (period === 'monthly') {
+    const start = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() - 1, 1));
+    const end = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 0));
+    return `${utcDateLabel(start)} – ${utcDateLabel(end)}`;
+  }
+  return null;
+};
+
 /**
  * Yesterday as UTC `YYYY-MM-DD`: the newest day a daily board can score.
  *

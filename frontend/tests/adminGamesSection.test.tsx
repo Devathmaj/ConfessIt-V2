@@ -20,7 +20,10 @@ import { GamesFeaturedPage } from '@/pages/GamesFeaturedPage';
 import { GamesSelectPage } from '@/pages/GamesSelectPage';
 import { CAPABILITIES, type Capability, can } from '@/lib/capabilities';
 import { AVAILABLE_GAMES } from '@/lib/gamesCatalog';
-import { lastCompletedDayAnchor } from '@/lib/gamesLeaderboard';
+import {
+  lastCompletedDayAnchor,
+  previousPeriodAnchor,
+} from '@/lib/gamesLeaderboard';
 import {
   clearFeaturedGame,
   createAnagramGame,
@@ -891,34 +894,38 @@ describe('AdminGamesLeaderboard: the server-backed board', () => {
   });
 
   it('renders the standings the league board answers', async () => {
-    vi.mocked(getAdminIndividualLeaderboard).mockResolvedValue({
-      competition_type: 'individual',
-      period: 'weekly',
-      game_id: null,
-      opportunity_count: 2,
-      total: 2,
-      entries: [
-        {
-          rank: 1,
-          user_id: 'user-1',
-          display_name: 'Ada',
-          score: 150,
-          native: {},
-          is_featured: true,
-          opportunities_played: 2,
-          per_game: { wordle: 100, anagram: 50 },
-        },
-        {
-          rank: 2,
-          user_id: 'user-2',
-          display_name: 'Bo',
-          score: 25,
-          native: {},
-          is_featured: false,
-          opportunities_played: 1,
-        },
-      ],
-    });
+    vi.mocked(getAdminIndividualLeaderboard).mockImplementation(async (query = {}) =>
+      query.limit === 3
+        ? emptyIndividualBoard()
+        : {
+            competition_type: 'individual',
+            period: 'weekly',
+            game_id: null,
+            opportunity_count: 2,
+            total: 2,
+            entries: [
+              {
+                rank: 1,
+                user_id: 'user-1',
+                display_name: 'Ada',
+                score: 150,
+                native: {},
+                is_featured: true,
+                opportunities_played: 2,
+                per_game: { wordle: 100, anagram: 50 },
+              },
+              {
+                rank: 2,
+                user_id: 'user-2',
+                display_name: 'Bo',
+                score: 25,
+                native: {},
+                is_featured: false,
+                opportunities_played: 1,
+              },
+            ],
+          },
+    );
     renderSection('/admin/games/leaderboard');
 
     expect(await screen.findByText('Ada')).toBeInTheDocument();
@@ -927,6 +934,60 @@ describe('AdminGamesLeaderboard: the server-backed board', () => {
     expect(screen.getByText(/wordle 100/)).toBeInTheDocument();
     expect(getAdminIndividualLeaderboard).toHaveBeenCalledWith(
       expect.objectContaining({ period: 'weekly', skip: 0 }),
+    );
+  });
+
+  it('shows the previous week of a live weekly board', async () => {
+    vi.mocked(getAdminIndividualLeaderboard).mockImplementation(async (query = {}) =>
+      query.limit === 3
+        ? {
+            ...emptyIndividualBoard(),
+            total: 3,
+            entries: [
+              {
+                rank: 1,
+                user_id: 'prev-1',
+                display_name: 'Pat',
+                score: 180,
+                native: {},
+                is_featured: false,
+                opportunities_played: 4,
+              },
+              {
+                rank: 2,
+                user_id: 'prev-2',
+                display_name: 'Quinn',
+                score: 120,
+                native: {},
+                is_featured: false,
+                opportunities_played: 3,
+              },
+              {
+                rank: 3,
+                user_id: 'prev-3',
+                display_name: 'Rae',
+                score: 60,
+                native: {},
+                is_featured: false,
+                opportunities_played: 2,
+              },
+            ],
+          }
+        : emptyIndividualBoard(),
+    );
+    renderSection('/admin/games/leaderboard');
+
+    expect(await screen.findByText("Previous week's top 3")).toBeInTheDocument();
+    expect(screen.getByText('Pat')).toBeInTheDocument();
+    expect(screen.getByText('Quinn')).toBeInTheDocument();
+    expect(screen.getByText('Rae')).toBeInTheDocument();
+    expect(getAdminIndividualLeaderboard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        period: 'weekly',
+        anchor: previousPeriodAnchor('weekly', todayIso()),
+        skip: 0,
+        limit: 3,
+      }),
     );
   });
 
@@ -944,26 +1005,30 @@ describe('AdminGamesLeaderboard: the server-backed board', () => {
   });
 
   it('switches to the couples board and narrows to a couple title', async () => {
-    vi.mocked(getAdminCouplesLeaderboard).mockResolvedValue({
-      competition_type: 'couple',
-      period: 'weekly',
-      game_id: null,
-      opportunity_count: 1,
-      total: 1,
-      entries: [
-        {
-          rank: 1,
-          member_a_id: 'a',
-          member_b_id: 'b',
-          member_a_name: 'Al',
-          member_b_name: 'Bo',
-          score: 100,
-          native: {},
-          is_featured: false,
-          opportunities_played: 1,
-        },
-      ],
-    });
+    vi.mocked(getAdminCouplesLeaderboard).mockImplementation(async (query = {}) =>
+      query.limit === 3
+        ? emptyCoupleBoard()
+        : {
+            competition_type: 'couple',
+            period: 'weekly',
+            game_id: null,
+            opportunity_count: 1,
+            total: 1,
+            entries: [
+              {
+                rank: 1,
+                member_a_id: 'a',
+                member_b_id: 'b',
+                member_a_name: 'Al',
+                member_b_name: 'Bo',
+                score: 100,
+                native: {},
+                is_featured: false,
+                opportunities_played: 1,
+              },
+            ],
+          },
+    );
     renderSection('/admin/games/leaderboard');
 
     fireEvent.click(screen.getByRole('button', { name: 'Couples' }));

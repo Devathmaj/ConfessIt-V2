@@ -22,6 +22,8 @@ import {
   entryDisplayName,
   gamesForCompetition,
   lastCompletedDayAnchor,
+  previousPeriodAnchor,
+  previousPeriodRangeLabel,
   todayAnchor,
   type LeagueCompetitionType,
   type LeagueCoupleEntry,
@@ -127,6 +129,9 @@ export const GamesLeaderboardPage = () => {
   }));
   const anchor = anchors[period];
   const [entries, setEntries] = useState<BoardEntry[]>([]);
+  // Weekly and monthly boards are windows: the previous one is already final,
+  // so its top three is shown beside the live table.
+  const [previousEntries, setPreviousEntries] = useState<BoardEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [opportunityCount, setOpportunityCount] = useState<number | null>(null);
   const [standing, setStanding] = useState<LeagueMyStanding | null>(null);
@@ -156,14 +161,24 @@ export const GamesLeaderboardPage = () => {
     async (offset: number, append: boolean) => {
       if (gameId !== ALL_GAMES_FILTER) {
         setLoading(false);
+        setPreviousEntries([]);
         return;
       }
       if (append) {
         setLoadingMore(true);
       } else {
         setLoading(true);
+        setPreviousEntries([]);
       }
       setError(null);
+      // The settled top three of the window before this one. Daily boards need
+      // no previous card -- yesterday is already today's neighbour -- while
+      // weekly/monthly roll over to an empty window, so this keeps the final
+      // table visible.
+      const previousQuery =
+        !append && (period === 'weekly' || period === 'monthly')
+          ? { period, anchor: previousPeriodAnchor(period, anchor), skip: 0, limit: 3 }
+          : null;
       try {
         const query = {
           period,
@@ -172,14 +187,22 @@ export const GamesLeaderboardPage = () => {
           skip: offset,
           limit: PAGE_SIZE,
         };
-        const board =
+        const [board, previous] = await Promise.all([
           competition === 'couple'
-            ? await getCouplesLeaderboard(query)
-            : await getIndividualLeaderboard(query);
+            ? getCouplesLeaderboard(query)
+            : getIndividualLeaderboard(query),
+          previousQuery
+            ? (competition === 'couple'
+                ? getCouplesLeaderboard(previousQuery)
+                : getIndividualLeaderboard(previousQuery)
+              ).catch(() => null)
+            : Promise.resolve(null),
+        ]);
         setEntries((prev) => (append ? [...prev, ...board.entries] : [...board.entries]));
         setTotal(board.total);
         setOpportunityCount(board.opportunity_count ?? null);
         if (!append) {
+          setPreviousEntries(previous?.entries ?? []);
           // The standing read must never clear the board: it answers a
           // different question (the viewer's own rows) and a failure here
           // used to wipe the standings the reader was already looking at.
@@ -244,6 +267,8 @@ export const GamesLeaderboardPage = () => {
   const topThree = entries.slice(0, 3);
   const remainingRows = entries.slice(3);
   const canLoadMore = entries.length < total;
+  const hasPreviousPeriod = period === 'weekly' || period === 'monthly';
+  const previousRange = hasPreviousPeriod ? previousPeriodRangeLabel(period, anchor) : null;
 
   return (
     <div>
@@ -494,6 +519,28 @@ export const GamesLeaderboardPage = () => {
             </div>
           )}
         </>
+      )}
+
+      {!loading && hasPreviousPeriod && previousEntries.length > 0 && (
+        <Card className="mt-4 rounded-2xl border-border/60 bg-card/70 backdrop-blur">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-bold">
+              {period === 'weekly' ? "Previous week's top 3" : "Previous month's top 3"}
+            </CardTitle>
+            {previousRange && (
+              <p className="text-xs text-muted-foreground">{previousRange} · final standings</p>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {previousEntries.map((entry) => (
+              <LeaderboardRow
+                key={isCoupleEntry(entry) ? `${entry.member_a_id}:${entry.member_b_id}` : entry.user_id}
+                entry={entry}
+                gameId={null}
+              />
+            ))}
+          </CardContent>
+        </Card>
       )}
 
       <p className="mt-6 text-center text-xs text-muted-foreground">
