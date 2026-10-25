@@ -16,7 +16,9 @@ vi.mock('sonner', () => ({
 }));
 
 const violationError = (message: string) => {
-  const err: any = new Error(message);
+  const err = new Error(message) as Error & {
+    response: { status: number; data: { detail: string } };
+  };
   err.response = { status: 422, data: { detail: message } };
   return err;
 };

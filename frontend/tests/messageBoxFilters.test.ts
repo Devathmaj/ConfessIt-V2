@@ -15,7 +15,10 @@ const STATUSES = ['pending', 'requested', 'accepted', 'rejected', 'terminated'] 
  * A conversation `offsetMs` from now, so "expired" is a function of the fake clock rather
  * than a hardcoded literal that would rot.
  */
-const conversation = (status: (typeof STATUSES)[number], offsetMs: number) =>
+const conversation = (
+  status: (typeof STATUSES)[number],
+  offsetMs: number,
+): Parameters<typeof matchesConversationFilter>[0] =>
   ({
     match: {
       id: 'm1',
@@ -30,9 +33,17 @@ const conversation = (status: (typeof STATUSES)[number], offsetMs: number) =>
       receiver_regno: 'B',
       created_at: new Date().toISOString(),
     },
-    other_user: { regno: 'B', name: 'Bob', year: 2, department: 'CSE' },
+    other_user: {
+      regno: 'B',
+      name: 'Bob',
+      profile_picture_url: '',
+      year: 2,
+      department: 'CSE',
+      bio: '',
+      interests: [],
+    },
     is_initiator: true,
-  }) as any;
+  });
 
 const LIVE = 2 * HOUR;
 const GONE = -1 * HOUR;

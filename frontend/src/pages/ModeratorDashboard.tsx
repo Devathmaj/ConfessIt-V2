@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 import { useEffect, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -124,7 +125,7 @@ const readCount = async (
   try {
     return { value: pick(await read()), ok: true };
   } catch (error) {
-    console.error(`Failed to read the ${label} count`, error);
+    logger.error(`Failed to read the ${label} count`, error);
     return { value: null, ok: false };
   }
 };

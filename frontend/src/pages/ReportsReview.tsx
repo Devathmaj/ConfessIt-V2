@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 import { useEffect, useRef, useState } from 'react';
 import {
   getAdminConfessionReports,
@@ -11,6 +12,7 @@ import {
   unhideAdminMessage,
 } from '@/services/api';
 import { AdminNavigation } from '@/components/AdminNavigation';
+import { apiErrorStatus } from '@/lib/apiError';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -582,7 +584,7 @@ export const ReportsReview = () => {
         }
       } catch (error) {
         if (!cancelled) {
-          console.error('Failed to load report queues', error);
+          logger.error('Failed to load report queues', error);
           toast.error('Unable to load reports for review.');
         }
       } finally {
@@ -687,7 +689,7 @@ export const ReportsReview = () => {
       }
     } catch (error) {
       if (!isCurrentQueueRead(queue, readId)) return;
-      console.error('Failed to load more reports', error);
+      logger.error('Failed to load more reports', error);
       toast.error('Unable to load more reports.');
     } finally {
       if (isCurrentQueueRead(queue, readId)) {
@@ -736,7 +738,7 @@ export const ReportsReview = () => {
       }
     } catch (error) {
       if (!isCurrentQueueRead(queue, readId)) return;
-      console.error('Failed to refresh the report queue', error);
+      logger.error('Failed to refresh the report queue', error);
       toast.error('Unable to refresh the reports.');
     } finally {
       if (isCurrentQueueRead(queue, readId)) {
@@ -786,7 +788,7 @@ export const ReportsReview = () => {
       }
       toast.success(RESOLUTION_LABELS[status].toast);
     } catch (error) {
-      console.error('Failed to close report', error);
+      logger.error('Failed to close report', error);
       toast.error('Unable to update this report.');
     } finally {
       // Cleared here rather than on the dialog's own close so a failed request does not leave
@@ -895,8 +897,8 @@ export const ReportsReview = () => {
       }
       await refreshQueue(targetType === 'message' ? 'messages' : 'confessions');
       toast.success('Content restored to public view.');
-    } catch (error: any) {
-      if (error?.response?.status === 409) {
+    } catch (error) {
+      if (apiErrorStatus(error) === 409) {
         toast.error('This content was hidden by a moderator and cannot be restored here.');
       } else {
         toast.error('Could not restore the content.');
@@ -1200,7 +1202,7 @@ export const ReportsReview = () => {
                   title={`Love note reported by ${partyName(report.reporter)}`}
                   status={statusBadge(report.status)}
                   reason={report.reason}
-                  content={report.body}
+                  content={report.moderation_body}
                   meta={
                     <>
                       Reported {formatTimestamp(report.reported_at)} · Sent{' '}
@@ -1286,7 +1288,7 @@ export const ReportsReview = () => {
                     title={`${isCaseClosed ? 'Detective thread message' : 'Message'} reported by ${partyName(report.reporter)}`}
                     status={statusBadge(report.status, report.reporter?.name)}
                     reason={report.reason}
-                  content={report.moderation_body}
+                  content={report.body}
                     meta={
                       <>
                         Reported {formatTimestamp(report.reported_at)} · Sent{' '}

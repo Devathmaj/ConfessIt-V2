@@ -68,8 +68,7 @@ export const CaseClosedGamePage = () => {
   }, [refresh]);
 
   useEffect(() => {
-    if (state === null) return;
-    if (state.stage !== 'investigating') return;
+    if (state?.stage !== 'investigating') return;
     const id = window.setInterval(() => void refresh(true), 15000);
     return () => window.clearInterval(id);
   }, [state?.stage, refresh]);

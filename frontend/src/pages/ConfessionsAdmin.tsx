@@ -1,4 +1,5 @@
 
+import { logger } from '@/lib/logger';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -17,6 +18,7 @@ import { AdminNavigation } from '@/components/AdminNavigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
 import { getAdminConfessions, hideAdminComment, hideAdminConfession, searchAdminConfessions, unhideAdminComment, unhideAdminConfession, type HybridSemanticStatus } from '@/services/api';
 import { toast } from 'sonner';
+import { apiErrorStatus } from '@/lib/apiError';
 import { formatDateTimeDDMMYYYY, timestampMs } from '@/lib/utils';
 import {
   Heart,
@@ -415,7 +417,7 @@ export const ConfessionsAdmin = () => {
       setSemanticStatus((answer.semantic as { status?: HybridSemanticStatus })?.status ?? 'unavailable');
       return { rows, total: totalOf(answer.keyword, 0) };
     } catch (error) {
-      console.error('Hybrid search unavailable, falling back to keyword-only', error);
+      logger.error('Hybrid search unavailable, falling back to keyword-only', error);
       const page = await readPage(skip, limit, question);
       setSemanticItems([]);
       setSemanticStatus('unavailable');
@@ -474,7 +476,7 @@ export const ConfessionsAdmin = () => {
         }
       } catch (error) {
         if (!cancelled) {
-          console.error('Failed to fetch confessions', error);
+          logger.error('Failed to fetch confessions', error);
           toast.error('Unable to load confessions for review.');
         }
       } finally {
@@ -490,6 +492,8 @@ export const ConfessionsAdmin = () => {
     return () => {
       cancelled = true;
     };
+    // readHybrid is re-created each render; listing it would refetch continuously.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedSearch, filterOption, sortOption]);
 
   /** Whether answers arrive as server pages (`null` legacy rows) or one legacy list. */
@@ -588,7 +592,7 @@ export const ConfessionsAdmin = () => {
         setTotal(page.total);
       }
     } catch (error) {
-      console.error('Failed to refresh confessions', error);
+      logger.error('Failed to refresh confessions', error);
       toast.error('Unable to refresh the confessions.');
     } finally {
       setRefreshing(false);
@@ -616,7 +620,7 @@ export const ConfessionsAdmin = () => {
       setItems((prev) => [...prev, ...page.rows.filter((row) => !seen.has(row.id))]);
       setTotal(page.total);
     } catch (error) {
-      console.error('Failed to load more confessions', error);
+      logger.error('Failed to load more confessions', error);
       toast.error('Unable to load more confessions.');
     } finally {
       setLoadingMore(false);
@@ -695,7 +699,7 @@ export const ConfessionsAdmin = () => {
           : 'Confession hidden from public view.',
       );
     } catch (error) {
-      console.error('Failed to hide confession', error);
+      logger.error('Failed to hide confession', error);
       toast.error('Could not hide the confession.');
     } finally {
       setDialogOpen(false);
@@ -745,7 +749,7 @@ export const ConfessionsAdmin = () => {
           : 'Comment hidden from the confession.',
       );
     } catch (error) {
-      console.error('Failed to hide comment', error);
+      logger.error('Failed to hide comment', error);
       toast.error('Could not hide the comment.');
     } finally {
       setPendingCommentId(null);
@@ -773,8 +777,8 @@ export const ConfessionsAdmin = () => {
         await refreshWindow();
       }
       toast.success('Confession restored to public view.');
-    } catch (error: any) {
-      if (error?.response?.status === 409) {
+    } catch (error) {
+      if (apiErrorStatus(error) === 409) {
         toast.error('This confession was hidden by a moderator and cannot be restored here.');
       } else {
         toast.error('Could not restore the confession.');
@@ -812,8 +816,8 @@ export const ConfessionsAdmin = () => {
         await refreshWindow();
       }
       toast.success('Comment restored to public view.');
-    } catch (error: any) {
-      if (error?.response?.status === 409) {
+    } catch (error) {
+      if (apiErrorStatus(error) === 409) {
         toast.error('This comment was hidden by a moderator and cannot be restored here.');
       } else {
         toast.error('Could not restore the comment.');

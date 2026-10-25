@@ -11,6 +11,7 @@
  * namespace, same Redis infrastructure).
  */
 
+import { logger } from './logger';
 import { apiWsBase } from './apiBase';
 import {
   CASE_CLOSED_CONVERSATION_MESSAGE_MAX,
@@ -123,7 +124,7 @@ class CaseClosedMessagingClient {
                   try {
                     callback();
                   } catch (error) {
-                    console.error('Error in Case Closed reconnect callback:', error);
+                    logger.error('Error in Case Closed reconnect callback:', error);
                   }
                 });
               }
@@ -132,7 +133,7 @@ class CaseClosedMessagingClient {
                 try {
                   callback(data.data!);
                 } catch (error) {
-                  console.error('Error in Case Closed message callback:', error);
+                  logger.error('Error in Case Closed message callback:', error);
                 }
               });
             } else if (data.type === 'error') {
@@ -141,7 +142,7 @@ class CaseClosedMessagingClient {
               });
             }
           } catch (error) {
-            console.error('Error parsing Case Closed WS frame:', error);
+            logger.error('Error parsing Case Closed WS frame:', error);
           }
         };
 
@@ -160,7 +161,7 @@ class CaseClosedMessagingClient {
               try {
                 callback(refusal);
               } catch (error) {
-                console.error('Error in error callback:', error);
+                logger.error('Error in error callback:', error);
               }
             });
             return;
@@ -170,7 +171,7 @@ class CaseClosedMessagingClient {
             this.recovering = true;
             setTimeout(() => {
               this.connect(true).catch((error) => {
-                console.error('Case Closed WS reconnect failed:', error);
+                logger.error('Case Closed WS reconnect failed:', error);
               });
             }, this.reconnectDelay * this.reconnectAttempts);
           }

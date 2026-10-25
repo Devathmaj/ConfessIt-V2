@@ -4,7 +4,19 @@ import { runInNewContext } from 'node:vm';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type WorkerListener = (event: any) => void;
+interface WorkerEvent {
+  request: Request;
+  respondWith: (response: Response | Promise<Response>) => void;
+  waitUntil: (promise: Promise<unknown>) => void;
+}
+
+type WorkerListener = (event: WorkerEvent) => void;
+
+interface CacheObject {
+  match: (request: Request | string) => Promise<Response | undefined>;
+  put: (request: Request | string, response: Response) => Promise<void>;
+  delete: (request: Request | string) => Promise<boolean>;
+}
 
 const cacheKey = (request: Request | string) =>
   typeof request === 'string' ? request : request.url;
@@ -12,7 +24,7 @@ const cacheKey = (request: Request | string) =>
 const loadWorker = () => {
   const listeners = new Map<string, WorkerListener[]>();
   const stores = new Map<string, Map<string, Response>>();
-  const cacheObjects = new Map<string, any>();
+  const cacheObjects = new Map<string, CacheObject>();
 
   const caches = {
     open: vi.fn(async (name: string) => {

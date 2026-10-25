@@ -5,6 +5,7 @@
 // interceptor registers exactly once); confessions/games/admin follow the same pattern as
 // they are extracted. New code should import from `@/services/api/<domain>` directly.
 
+import { logger } from '@/lib/logger';
 import axios from 'axios';
 import { API_URL } from '@/lib/apiBase';
 import { SESSION_REQUEST_TIMEOUT_MS } from '@/lib/apiTimeouts';
@@ -68,7 +69,7 @@ export {
 // --- Confession Endpoints ---
 
 export interface ConfessionsPage {
-  confessions: any[];
+  confessions: unknown[];
   total: number;
   skip: number;
   limit: number;
@@ -85,7 +86,7 @@ export interface ConfessionsPage {
  * whose total is the array length.
  */
 export interface ConfessionCommentsPage {
-  comments: any[];
+  comments: unknown[];
   total: number;
   skip: number;
   limit: number;
@@ -180,7 +181,7 @@ export const getConfessionCooldown = async () => {
   };
 };
 
-export const createConfession = async (confession: any) => {
+export const createConfession = async (confession: unknown) => {
   const response = await axios.post(`${API_URL}/confessions`, confession, { headers: getAuthHeaders() });
   // A new post changes the head of every feed order. The first page is re-read
   // by the screen; marking the cache stale is what makes that re-read actually
@@ -209,8 +210,8 @@ export type HybridSemanticStatus =
 export interface HybridSearchResult {
   query: string;
   limit: number;
-  keyword: { items: any[]; total: number };
-  semantic: { items: any[]; status: HybridSemanticStatus };
+  keyword: { items: unknown[]; total: number };
+  semantic: { items: unknown[]; status: HybridSemanticStatus };
 }
 
 /** Legacy alias for the semantic-only response era. */
@@ -240,8 +241,8 @@ export interface AdminHybridSearchResult {
   sort: string;
   skip: number;
   limit: number;
-  keyword: { items: any[]; total: number; skip: number; limit: number };
-  semantic: { items: any[]; status: HybridSemanticStatus };
+  keyword: { items: unknown[]; total: number; skip: number; limit: number };
+  semantic: { items: unknown[]; status: HybridSemanticStatus };
 }
 
 export const searchAdminConfessions = async (
@@ -357,7 +358,7 @@ export const getCurrentUser = (token?: string) =>
     },
   });
 
-export const updateUserProfile = async (profileData: any) => {
+export const updateUserProfile = async (profileData: unknown) => {
     const response = await axios.put(`${API_URL}/profile/update`, profileData, {
         headers: getAuthHeaders(),
     });
@@ -402,11 +403,11 @@ export const findMatch = async () => {
 
 // --- Conversation Endpoints ---
 export const requestConversation = async (match_id: string) => {
-    console.log("API: requestConversation called with match_id:", match_id); // Debug log
+    logger.log("API: requestConversation called with match_id:", match_id); // Debug log
     const response = await axios.post(`${API_URL}/conversations/request`, { match_id }, {
         headers: getAuthHeaders(),
     });
-    console.log("API: requestConversation response:", response.data); // Debug log
+    logger.log("API: requestConversation response:", response.data); // Debug log
     return response.data;
 };
 
@@ -496,7 +497,7 @@ export const unblockConversation = async (match_id: string) => {
 // (older servers and unit-test mocks), normalising the latter to a single page whose total
 // is the array length.
 export interface LoveNoteRecipientsPage {
-    users: any[];
+    users: unknown[];
     total: number;
     skip: number;
     limit: number;
@@ -568,7 +569,7 @@ export const sendLoveNote = async (noteData: {
 // unit-test mocks), normalising the latter to a single page whose total is the array
 // length.
 export interface ReceivedLoveNotesPage {
-    notes: any[];
+    notes: unknown[];
     total: number;
     skip: number;
     limit: number;
@@ -619,7 +620,7 @@ export const reportLoveNote = async (noteId: string, reason: string) => {
 // --- Profile Endpoints ---
 
 export interface NotificationsPage {
-    notifications: any[];
+    notifications: unknown[];
     total: number;
     skip: number;
     limit: number;
@@ -684,7 +685,7 @@ export interface AdminConfessionsQuery {
 }
 
 export interface AdminConfessionsPage {
-    confessions: any[];
+    confessions: unknown[];
     total: number;
     skip: number;
     limit: number;
@@ -822,7 +823,7 @@ export interface AdminLoveNotesQuery {
 }
 
 export interface AdminLoveNotesPage {
-    notes: any[];
+    notes: unknown[];
     total: number;
     skip: number;
     limit: number;
@@ -1029,7 +1030,7 @@ export interface AdminUsersQuery {
 }
 
 export interface AdminUsersPage {
-    users: any[];
+    users: unknown[];
     total: number;
     skip: number;
     limit: number;

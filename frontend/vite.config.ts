@@ -47,18 +47,38 @@ export default defineConfig(({ mode }) => ({
   // `esbuild.drop`: this repo builds on Vite 8's oxc pipeline, which ignores
   // `esbuild.drop` (verified: console calls survived a production bundle with
   // it set). Substitution covers both calls and bare references such as
-  // `.catch(console.error)`, which `drop` cannot remove either. There are no
-  // `window.console`, destructured or computed console uses in src, and no
-  // `debugger` statements, so the six methods below are the complete surface.
+  // `.catch(console.error)`, which `drop` cannot remove either. The whole console
+  // surface is replaced, not just the methods the app uses today, so a later
+  // `console.table`/`group`/`time` cannot leak request data either. The post-build
+  // gate in scripts/check-prod-bundle.mjs fails the build if any call survives;
+  // the Nginx image (frontend/Dockerfile) builds through `npm run build:prod`.
   define: mode === 'production'
-    ? {
-        'console.log': '(()=>{})',
-        'console.info': '(()=>{})',
-        'console.warn': '(()=>{})',
-        'console.error': '(()=>{})',
-        'console.debug': '(()=>{})',
-        'console.trace': '(()=>{})',
-      }
+    ? Object.fromEntries(
+        [
+          'log',
+          'info',
+          'warn',
+          'error',
+          'debug',
+          'trace',
+          'table',
+          'dir',
+          'dirxml',
+          'group',
+          'groupCollapsed',
+          'groupEnd',
+          'assert',
+          'count',
+          'countReset',
+          'clear',
+          'time',
+          'timeEnd',
+          'timeLog',
+          'timeStamp',
+          'profile',
+          'profileEnd',
+        ].map((method) => [`console.${method}`, '(()=>{})']),
+      )
     : {},
   test: {
     environment: 'jsdom',

@@ -92,6 +92,18 @@ export const describeValidationDetail = (detail?: string | PydanticError[]): str
     return Array.from(new Set(parts)).join('; ');
 };
 
+/** The HTTP status carried by an Axios failure, when there is one. */
+export const apiErrorStatus = (error: unknown): number | undefined => {
+    if (!isErrorRecord(error)) return undefined;
+    return error.response?.status;
+};
+
+/** The server's `detail` rendered as text, or `null` when it said nothing usable. */
+export const describeApiErrorDetail = (error: unknown): string | null => {
+    if (!isErrorRecord(error)) return null;
+    return describeValidationDetail(error.response?.data?.detail);
+};
+
 /**
  * The best available human-readable explanation of a failed request.
  *

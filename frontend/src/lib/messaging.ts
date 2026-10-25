@@ -9,6 +9,7 @@
 // `authorizedFetch` is that same courtesy for the fetch transport: it carries the bearer
 // that is current at the moment of the call and refreshes an expired one instead of
 // treating the refusal as the end of the session.
+import { logger } from './logger';
 import { authorizedFetch } from './authFetch';
 import { API_URL, apiWsBase } from './apiBase';
 import { CONVERSATION_MESSAGE_MAX } from './limits';
@@ -141,19 +142,19 @@ class MessagingClient {
       // it would leave a live socket behind that nobody closes -- still
       // pinging, still holding a Redis connection, and still delivering into a
       // thread that has moved on.
-      console.log('🔌 Connect overtaken; not opening a socket');
+      logger.log('🔌 Connect overtaken; not opening a socket');
       return false;
     }
     const wsUrl = `${apiWsBase()}/messages/ws/${conversationId}?ticket=${encodeURIComponent(ticket)}`;
 
-    console.log('🔌 Connecting to WebSocket:', wsUrl.replace(ticket, 'TICKET'));
+    logger.log('🔌 Connecting to WebSocket:', wsUrl.replace(ticket, 'TICKET'));
 
     return new Promise((resolve, reject) => {
       try {
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
-          console.log('✅ WebSocket connected');
+          logger.log('✅ WebSocket connected');
           this.reconnectAttempts = 0;
           this.startPingInterval();
         };
@@ -163,7 +164,7 @@ class MessagingClient {
             const data: WebSocketMessage = JSON.parse(event.data);
             
             if (data.type === 'connected') {
-              console.log('WebSocket authenticated:', data.user_regno);
+              logger.log('WebSocket authenticated:', data.user_regno);
               const recovered = this.recovering;
               this.recovering = false;
               resolve(true);
@@ -175,7 +176,7 @@ class MessagingClient {
                   try {
                     callback();
                   } catch (error) {
-                    console.error('Error in reconnect callback:', error);
+                    logger.error('Error in reconnect callback:', error);
                   }
                 });
               }
@@ -185,22 +186,22 @@ class MessagingClient {
                 try {
                   callback(data.data!);
                 } catch (error) {
-                  console.error('Error in message callback:', error);
+                  logger.error('Error in message callback:', error);
                 }
               });
             } else if (data.type === 'error') {
-              console.error('WebSocket error:', data.error);
+              logger.error('WebSocket error:', data.error);
               this.errorCallbacks.forEach(callback => {
                 callback(new Error(data.error || 'Unknown WebSocket error'));
               });
             }
           } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
+            logger.error('Error parsing WebSocket message:', error);
           }
         };
 
         this.ws.onerror = (error) => {
-          console.error('❌ WebSocket error:', error);
+          logger.error('❌ WebSocket error:', error);
           this.errorCallbacks.forEach(callback => {
             callback(new Error('WebSocket connection error'));
           });
@@ -208,7 +209,7 @@ class MessagingClient {
         };
 
         this.ws.onclose = (event) => {
-          console.log('🔌 WebSocket disconnected:', event.code, event.reason);
+          logger.log('🔌 WebSocket disconnected:', event.code, event.reason);
           this.stopPingInterval();
 
           // A refused handshake (bad ticket, no entitlement, foreign origin)
@@ -222,7 +223,7 @@ class MessagingClient {
               try {
                 callback(refusal);
               } catch (error) {
-                console.error('Error in error callback:', error);
+                logger.error('Error in error callback:', error);
               }
             });
             return;
@@ -232,21 +233,21 @@ class MessagingClient {
           if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             this.recovering = true;
-            console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`);
+            logger.log(`Reconnecting... (attempt ${this.reconnectAttempts})`);
             setTimeout(() => {
               if (this.conversationId) {
                 // Explicit call form, not `.catch(console.error)`: the production
                 // build strips console.* calls via esbuild `drop`, which cannot
                 // remove a bare function reference.
                 this.connect(this.conversationId).catch((error) => {
-                  console.error('WebSocket reconnect failed:', error);
+                  logger.error('WebSocket reconnect failed:', error);
                 });
               }
             }, this.reconnectDelay * this.reconnectAttempts);
           }
         };
       } catch (error) {
-        console.error('Failed to create WebSocket:', error);
+        logger.error('Failed to create WebSocket:', error);
         reject(error);
       }
     });
@@ -431,14 +432,14 @@ export async function fetchMessages(
   const params = new URLSearchParams({ limit: String(limit) });
   if (before) params.set('before', before);
   const url = `${API_URL}/messages/${conversationId}?${params.toString()}`;
-  console.log('🌐 Fetching messages from:', url);
+  logger.log('🌐 Fetching messages from:', url);
 
   try {
     const response = await authorizedFetch(url, {
       signal: AbortSignal.timeout(15000),
     });
 
-    console.log('📡 Fetch response status:', response.status, response.statusText);
+    logger.log('📡 Fetch response status:', response.status, response.statusText);
 
     if (!response.ok) {
       // Fixed string, never the server's `detail`: this endpoint answers 404
@@ -449,7 +450,7 @@ export async function fetchMessages(
     }
 
     const data = await response.json();
-    console.log('✅ Fetch response data:', data);
+    logger.log('✅ Fetch response data:', data);
     // Null rather than a default: a response without the field means the server did not say,
     // and `messageQuota` decides what an absent allowance means rather than this file
     // inventing one. `total` is absent on legacy answers, which the dialog reads as
@@ -460,7 +461,7 @@ export async function fetchMessages(
       total: Array.isArray(data) ? data.length : (data.total ?? data.messages?.length ?? 0),
     };
   } catch (error) {
-    console.error('❌ Fetch exception:', error);
+    logger.error('❌ Fetch exception:', error);
     throw error;
   }
 }

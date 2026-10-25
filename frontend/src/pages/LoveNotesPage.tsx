@@ -1,5 +1,6 @@
 // src/pages/LoveNotesPage.tsx
 
+import { logger } from '@/lib/logger';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth, User } from '@/contexts/AuthContext';
@@ -8,7 +9,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { FloralDecor } from '@/components/FloralDecor';
 import { ScatteredIcons } from '@/components/ScatteredIcons';
@@ -42,6 +42,7 @@ import {
     Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { describeApiError } from '@/lib/apiError';
 import { Navigation } from '@/components/Navigation';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { ReportLoveNoteDialog } from '@/components/ReportLoveNoteDialog';
@@ -313,11 +314,11 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
             // A newer read has answered since: this one is for a filter the sender has
             // already changed, so its rows are not the ones on screen.
             if (latestRecipientReadId.current !== readId) return;
-            setRecipients((previous) => (append ? [...previous, ...page.users] : page.users));
+            setRecipients((previous) => (append ? [...previous, ...(page.users as Recipient[])] : (page.users as Recipient[])));
             setRecipientsTotal(page.total);
         } catch (error) {
             if (latestRecipientReadId.current !== readId) return;
-            console.error("Failed to load recipients:", error);
+            logger.error("Failed to load recipients:", error);
             toast.error("Could not load recipients. Please try again.");
         } finally {
             // Only the read that is still current may clear the flags: a stale read
@@ -361,7 +362,7 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
         try {
             applyInboxPage(await readInboxPage(receivedNotes.length, INBOX_PAGE_SIZE), true);
         } catch (error) {
-            console.error("Failed to load more love notes:", error);
+            logger.error("Failed to load more love notes:", error);
             toast.error("Could not load more love notes.");
         } finally {
             setLoadingMoreNotes(false);
@@ -396,7 +397,7 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                 applyInboxPage(notesPage, false);
 
             } catch (error) {
-                console.error("Failed to load initial data:", error);
+                logger.error("Failed to load initial data:", error);
                 toast.error("Could not load necessary data. Please try again later.");
             } finally {
                 setLoadingNotes(false);
@@ -422,7 +423,7 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                     setLoadingNotes(true);
                     applyInboxPage(await readInboxPage(0, INBOX_PAGE_SIZE), false);
                 } catch (error) {
-                    console.error("Failed to load received notes:", error);
+                    logger.error("Failed to load received notes:", error);
                     toast.error("Could not load your love notes.");
                 } finally {
                     setLoadingNotes(false);
@@ -431,6 +432,9 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
 
             fetchReceivedNotes();
         }
+        // Keyed to the tab flip only: the list and loading flags are read as the
+        // state of that moment, and listing them would refetch on every toggle.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab]);
 
     // A notification about a received love note arrives here as
@@ -475,6 +479,8 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
         next.delete('note');
         next.delete('tab');
         setSearchParams(next, { replace: true });
+        // loadMoreInbox is re-created each render; its inputs are listed instead.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [searchParams, setSearchParams, loadingNotes, receivedNotes, pagedInbox, inboxTotal, loadingMoreNotes]);
 
     // Used to open the tab named by ?tab= on a plain link with no note id, e.g. a plain
@@ -825,15 +831,12 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
             if (token) {
                 fetchAndSetUser(token);
             }
-        } catch (error: any) {
-            console.error("Failed to send love note:", error);
+        } catch (error) {
+            logger.error("Failed to send love note:", error);
             // Schema validation failures (422) report `detail` as a list of objects,
-            // while a raised HTTPException reports it as a plain string.
-            const detail = error.response?.data?.detail;
-            const errorMessage = Array.isArray(detail)
-                ? detail[0]?.msg
-                : detail;
-            toast.error(errorMessage || "Failed to send love note. Please try again.");
+            // while a raised HTTPException reports it as a plain string; the shared
+            // describer renders both.
+            toast.error(describeApiError(error, "Failed to send love note. Please try again."));
         } finally {
             setIsSending(false);
         }
@@ -880,7 +883,6 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                                 Create and share beautiful digital love notes
                             </p>
                         </div>
-                        <CountdownTimer />
                     </div>
                 </div>
 

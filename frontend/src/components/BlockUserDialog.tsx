@@ -1,4 +1,5 @@
 // src/components/BlockUserDialog.tsx
+import { logger } from '@/lib/logger';
 import React, { useState } from 'react';
 import {
   Dialog,
@@ -39,7 +40,7 @@ export const BlockUserDialog: React.FC<BlockUserDialogProps> = ({
       onBlockSuccess();
       onClose();
     } catch (error) {
-      console.error('Error blocking user:', error);
+      logger.error('Error blocking user:', error);
       // The server's own explanation, so a refusal that means something ("This
       // conversation is already closed.") is shown rather than a generic retry
       // suggestion. The same describer the unblock path uses.

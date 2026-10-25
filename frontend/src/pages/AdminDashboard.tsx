@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 import { useState, useEffect, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
@@ -122,7 +123,7 @@ export const AdminDashboard = () => {
         const data = await getAdminStats();
         setStats(data);
       } catch (error) {
-        console.error('Failed to load admin statistics', error);
+        logger.error('Failed to load admin statistics', error);
         toast.error('Unable to load dashboard statistics right now.');
       } finally {
         setLoading(false);

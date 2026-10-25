@@ -1,4 +1,5 @@
 // Updated ConversationDialog.tsx with WebSocket messaging
+import { logger } from '@/lib/logger';
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -292,6 +293,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       clearInterval(interval);
       cleanup();
     };
+    // Mount-only by design: these functions are re-created on every render, so
+    // listing them would restart the timer and refetch the conversation each pass.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keep the countdown's view of the data in step with the data itself, and start
@@ -316,12 +320,15 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       setBlockStatusKnown(false);
       checkBlockStatus();
     }
+    // checkBlockStatus reads the latest state at call time; listing it would re-run
+    // the check on every render instead of only when the conversation changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationData?.conversation?.id]);
 
   // Cleanup only on unmount
   useEffect(() => {
     return () => {
-      console.log('🧹 Component unmounting - cleaning up');
+      logger.log('🧹 Component unmounting - cleaning up');
       cleanup();
     };
   }, []);
@@ -353,14 +360,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     );
 
     if (shouldInitialize) {
-      console.log('🚀 Initializing messaging (not blocked)');
+      logger.log('🚀 Initializing messaging (not blocked)');
       initializeMessaging();
     } else if (isAcceptedConversation || isTerminatedConversation) {
       // Expired, blocked or terminated: the conversation is read-only, but its history is
       // still readable, so load it without a live connection. This branch used to require
       // `is_blocked`, so an expired conversation fell through both branches and the
       // history was never fetched at all.
-      console.log('📖 Read-only conversation - loading history without a live connection', {
+      logger.log('📖 Read-only conversation - loading history without a live connection', {
         is_expired: conversationData.match.is_expired,
         is_blocked: is_blocked,
         current_messages: messages.length,
@@ -369,13 +376,16 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
       if (token && messages.length === 0) {
         loadMessagesFromBackend().catch(error => {
-          console.error('Failed to load messages for read-only conversation:', error);
+          logger.error('Failed to load messages for read-only conversation:', error);
         });
       }
     }
 
     // Note: Cleanup is handled separately, not here
     // We don't want to clean up messages when is_blocked changes
+    // The helpers are re-created each render and the init must fire only on the
+    // transitions named above, so they stay out of the dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationData?.conversation?.id, conversationData?.conversation?.status, is_blocked, blockStatusKnown]);
 
   const cleanup = () => {
@@ -401,7 +411,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     if (!conversationData) return;
 
     if (!token) {
-      console.error('❌ No authentication token found');
+      logger.error('❌ No authentication token found');
       toast.error('Authentication token missing');
       return;
     }
@@ -413,12 +423,12 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     // first) and register two subscriptions, so every live message would
     // arrive twice. Whoever claims it first does the work.
     if (initializedConversationRef.current === conversationId) {
-      console.log('🔁 Messaging already initialised for this conversation; skipping');
+      logger.log('🔁 Messaging already initialised for this conversation; skipping');
       return;
     }
     initializedConversationRef.current = conversationId;
 
-    console.log('🔍 Initializing messaging:', {
+    logger.log('🔍 Initializing messaging:', {
       conversation_id: conversationId,
       has_token: !!token,
       is_blocked: is_blocked
@@ -426,9 +436,9 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
     try {
       // Always load existing messages first
-      console.log('⏳ Loading messages...');
+      logger.log('⏳ Loading messages...');
       await loadMessagesFromBackend();
-      console.log('✅ Messages loaded');
+      logger.log('✅ Messages loaded');
 
       // Only connect WebSocket if not blocked (for real-time updates). The ref, not
       // the state: this resumes after awaits, and a block (or unblock) landing
@@ -436,21 +446,21 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // during the history read orphans a live socket into a blocked conversation,
       // and unblocking leaves the thread silently socketless.
       if (!blockedRef.current) {
-        console.log('⏳ Connecting to WebSocket...');
+        logger.log('⏳ Connecting to WebSocket...');
         const opened = await messagingClient.connect(conversationId);
         if (!opened) {
           // Overtaken: the dialog closed (or the thread changed) while the
           // ticket was being fetched. There is no socket to subscribe to, and
           // no socket to leave behind.
-          console.log('↩️ WebSocket connect overtaken; not subscribing');
+          logger.log('↩️ WebSocket connect overtaken; not subscribing');
           setIsConnected(false);
           return;
         }
-        console.log('✅ WebSocket connection promise resolved');
+        logger.log('✅ WebSocket connection promise resolved');
 
         // Subscribe to new messages
         const unsubscribeMessage = messagingClient.onMessage((newMessage) => {
-          console.log('📨 New message received:', newMessage);
+          logger.log('📨 New message received:', newMessage);
           const isFromCaller = newMessage.sender_regno === currentUserRef.current;
           const messageWithFlag = {
             ...newMessage,
@@ -481,7 +491,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
 
         // Subscribe to errors
         const unsubscribeError = messagingClient.onError((error) => {
-          console.error('WebSocket error:', error);
+          logger.error('WebSocket error:', error);
           toast.error('Real-time connection error');
         });
         unsubscribeErrorRef.current = unsubscribeError;
@@ -496,14 +506,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
           });
         });
 
-        console.log('✅ Setting isConnected to true');
+        logger.log('✅ Setting isConnected to true');
         setIsConnected(true);
       } else {
-        console.log('⚠️ Conversation blocked - skipping WebSocket connection');
+        logger.log('⚠️ Conversation blocked - skipping WebSocket connection');
         setIsConnected(false);
       }
     } catch (error) {
-      console.error('Failed to initialize messaging:', error);
+      logger.error('Failed to initialize messaging:', error);
       // Don't show error toast if just loading messages failed when blocked
       if (!blockedRef.current) {
         toast.error('Failed to load messages');
@@ -513,26 +523,26 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   };
 
   const loadMessagesFromBackend = async () => {
-    console.log('📥 loadMessagesFromBackend called:', {
+    logger.log('📥 loadMessagesFromBackend called:', {
       has_conversationData: !!conversationData,
       conversation_id: conversationData?.conversation?.id,
     });
     
     if (!conversationData?.conversation?.id) {
-      console.log('⚠️ No conversation ID, returning early');
+      logger.log('⚠️ No conversation ID, returning early');
       return;
     }
 
     setLoadingMessages(true);
     try {
-      console.log('🔄 Fetching messages for:', conversationData.conversation.id);
+      logger.log('🔄 Fetching messages for:', conversationData.conversation.id);
       // The opening window is the newest one: latest message last, as the thread reads.
       const {
         messages,
         quota: fetchedQuota,
         total: fetchedTotal,
       } = await fetchMessages(conversationData.conversation.id, THREAD_PAGE_SIZE);
-      console.log('✅ Messages fetched:', messages.length);
+      logger.log('✅ Messages fetched:', messages.length);
 
       // Add is_sender flag to each message
       const messagesWithFlags = messages.map((msg) => ({
@@ -555,7 +565,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       recordQuota(fetchedQuota);
       scrollToBottom();
     } catch (error) {
-      console.error('❌ Failed to load messages:', error);
+      logger.error('❌ Failed to load messages:', error);
       toast.error('Failed to load messages');
       throw error; // Re-throw so caller knows it failed
     } finally {
@@ -607,7 +617,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       if (typeof fetchedTotal === 'number') setTotalMessages(fetchedTotal);
     } catch (error) {
       pendingPrependRef.current = null;
-      console.error('❌ Failed to load older messages:', error);
+      logger.error('❌ Failed to load older messages:', error);
       toast.error('Failed to load older messages');
     } finally {
       setLoadingOlder(false);
@@ -629,7 +639,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       currentUserRef.current = data.conversation.receiver_regno;
     }
     
-    console.log('👤 Current user set to:', currentUserRef.current, {
+    logger.log('👤 Current user set to:', currentUserRef.current, {
       from_auth: user?.regno,
       is_initiator: data.is_initiator,
       initiator_regno: data.conversation.initiator_regno,
@@ -650,7 +660,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     }
     
     // Debug: Log the conversation data to see what we have
-    console.log('📦 Setup Conversation Data:', {
+    logger.log('📦 Setup Conversation Data:', {
       status: data.conversation.status,
       is_initiator: data.is_initiator,
       is_blocked: data.is_blocked,
@@ -665,12 +675,12 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
     try {
       const response = await getCurrentConversation();
       
-      console.log('📡 API Response:', response);
+      logger.log('📡 API Response:', response);
       
       if (response.status === 'success' && response.match) {
         const data = response as ConversationData;
         
-        console.log('✅ Conversation Data:', {
+        logger.log('✅ Conversation Data:', {
           conversation_id: data.conversation.id,
           conversation_status: data.conversation.status
         });
@@ -681,7 +691,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         onClose();
       }
     } catch (error) {
-      console.error('Failed to fetch conversation:', error);
+      logger.error('Failed to fetch conversation:', error);
       toast.error('Failed to load conversation');
       onClose();
     } finally {
@@ -747,7 +757,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         toast.error('Failed to accept conversation');
       }
     } catch (error) {
-      console.error('Error accepting conversation:', error);
+      logger.error('Error accepting conversation:', error);
       toast.error('Failed to accept conversation');
     } finally {
       setAccepting(false);
@@ -764,7 +774,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       onRefresh();
       onClose();
     } catch (error) {
-      console.error('Error rejecting conversation:', error);
+      logger.error('Error rejecting conversation:', error);
       toast.error('Failed to reject conversation');
     } finally {
       setRejecting(false);
@@ -823,7 +833,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       });
       scrollToBottom();
     } catch (error) {
-      console.error('Error sending message:', error);
+      logger.error('Error sending message:', error);
       // Content safety refused it: the message was never delivered. Clear the composer (it
       // cannot be sent as written) and say why, rather than restoring text that would only
       // fail again.
@@ -856,7 +866,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         toast.success('Message copied to clipboard');
       })
       .catch((error) => {
-        console.error('Failed to copy message:', error);
+        logger.error('Failed to copy message:', error);
         toast.error('Failed to copy message');
       });
   };
@@ -885,7 +895,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // This works for both initiators and receivers!
       const response = await getConversationByMatch(conversationData.match.id);
       if (response.status === 'success' && response.is_blocked !== undefined) {
-        console.log('✅ Block status checked:', {
+        logger.log('✅ Block status checked:', {
           is_blocked: response.is_blocked,
           blocked_by: response.blocked_by
         });
@@ -902,7 +912,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         setMessagesHidden(shouldHide);
       }
     } catch (error) {
-      console.error('Error checking block status:', error);
+      logger.error('Error checking block status:', error);
     } finally {
       // Answered or failed: either way the init below must stop waiting. On failure
       // it decides on the setup value, exactly as it did before this gate existed.
@@ -917,7 +927,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
   const handleBlockSuccess = async () => {
     if (!conversationData || !currentUserRef.current || !token) return;
 
-    console.log('🔒 Block successful, updating UI...', {
+    logger.log('🔒 Block successful, updating UI...', {
       current_user: currentUserRef.current,
       current_messages_count: messages.length,
       backup_messages_count: messagesBackupRef.current.length,
@@ -931,7 +941,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       const savedMessages = messagesBackupRef.current.length > 0 
         ? [...messagesBackupRef.current] 
         : [...messages];
-      console.log('💾 Saved messages for restore:', savedMessages.length);
+      logger.log('💾 Saved messages for restore:', savedMessages.length);
       
       // Disconnect WebSocket first
       cleanup();
@@ -940,13 +950,13 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // IMPORTANT: Use getConversationByMatch instead of getCurrentConversation
       // This works for both initiators and receivers!
       const response = await getConversationByMatch(conversationData.match.id);
-      console.log('📡 Reloaded conversation after block:', response);
+      logger.log('📡 Reloaded conversation after block:', response);
       
       if (response.status === 'success') {
         const newConversationData = response as ConversationData;
         
         // Update block state immediately from response
-        console.log('🔄 Setting block state:', {
+        logger.log('🔄 Setting block state:', {
           is_blocked: newConversationData.is_blocked,
           blocked_by: newConversationData.blocked_by
         });
@@ -960,14 +970,14 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         
         // Force immediate UI update with React 18's automatic batching workaround
         setTimeout(() => {
-          console.log('🔄 Force updating block state after timeout');
+          logger.log('🔄 Force updating block state after timeout');
           blockedRef.current = newConversationData.is_blocked || false;
           setIsBlocked(newConversationData.is_blocked || false);
           setBlockedBy(newConversationData.blocked_by || null);
           
           // Restore messages
           if (savedMessages.length > 0) {
-            console.log('🔄 Restoring messages after state update:', savedMessages.length);
+            logger.log('🔄 Restoring messages after state update:', savedMessages.length);
             // The list is replaced, so the known ids are replaced with it.
             rememberMessageIds(savedMessages);
             const bounded = boundMessages(savedMessages, CHAT_IN_MEMORY_MESSAGE_MAX);
@@ -975,7 +985,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
             messagesBackupRef.current = bounded;
           } else {
             // If there were no messages, try to load them
-            console.log('📥 No saved messages, loading from backend...');
+            logger.log('📥 No saved messages, loading from backend...');
             fetchMessages(newConversationData.conversation.id)
               .then(({ messages: fetchedMessages, quota: fetchedQuota, total: fetchedTotal }) => {
                 const messagesWithFlags = fetchedMessages.map((msg) => ({
@@ -993,10 +1003,10 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
                 // this reload is the freshest reading of it, and it is also the answer that
                 // may have moved while the thread was blocked.
                 recordQuota(fetchedQuota);
-                console.log('✅ Messages loaded:', fetchedMessages.length);
+                logger.log('✅ Messages loaded:', fetchedMessages.length);
               })
               .catch(error => {
-                console.error('Failed to load messages:', error);
+                logger.error('Failed to load messages:', error);
               });
           }
         }, 50); // Reduced timeout for faster UI update
@@ -1004,7 +1014,7 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
         toast.success('User blocked successfully');
       }
     } catch (error) {
-      console.error('❌ Error reloading after block:', error);
+      logger.error('❌ Error reloading after block:', error);
       toast.error('Block successful but failed to refresh data');
     }
     
@@ -1031,8 +1041,8 @@ export const ConversationDialog: React.FC<ConversationDialogProps> = ({
       // still holding a Redis connection) and two message subscriptions, so
       // every live message would arrive twice.
       onRefresh(); // Refresh parent
-    } catch (error: any) {
-      console.error('Error unblocking user:', error);
+    } catch (error) {
+      logger.error('Error unblocking user:', error);
       // `detail` is a plain string for an HTTPException and an array of Pydantic error objects for a
       // 422. `Array.prototype.includes` exists too, so the old `.includes(...)` on a 422
       // answered false rather than throwing, and the operator was told "Failed to unblock user"

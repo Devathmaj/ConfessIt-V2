@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -30,7 +31,7 @@ interface NavigationItem {
   id: string;
   title: string;
   description: string;
-  icon: React.ComponentType<any>;
+  icon: React.ComponentType<{ className?: string }>;
 }
 
 // Interface for a confession
@@ -40,7 +41,7 @@ interface Confession {
   anonymous: boolean;
   is_mine: boolean;
   created_at: string;
-  comments: any[];
+  comments: unknown[];
   heart_count: number;
   haha_count: number;
   whoa_count: number;
@@ -85,7 +86,7 @@ const navigationItems: NavigationItem[] = [
  * parent render. It reads nothing but its props, so hoisting changes nothing it
  * shows -- only stops the churn.
  */
-const GlassCard = ({ children, className, ...props }: { children: React.ReactNode, className?: string, [key: string]: any }) => (
+const GlassCard = ({ children, className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={`group relative bg-white/5 backdrop-blur-xl border border-white/10 rounded-xl shadow-lg transition-all duration-300 overflow-hidden hover:bg-white/10 hover:border-white/20 ${className}`}
     {...props}
@@ -112,13 +113,13 @@ export const UserDashboard = () => {
     try {
       setIsLoading(true);
       // Fetch confessions ordered by popularity
-      const popularConfessions = (await getConfessions('popularity', { limit: 2 })).confessions;
+      const popularConfessions = (await getConfessions('popularity', { limit: 2 })).confessions as Confession[];
 
       // Fetch confessions ordered by time (recent)
-      const recentConfessions = (await getConfessions('time', { limit: 2 })).confessions;
+      const recentConfessions = (await getConfessions('time', { limit: 2 })).confessions as Confession[];
 
       // Fetch confessions ordered by comments
-      const commentedConfessions = (await getConfessions('comments', { limit: 2 })).confessions;
+      const commentedConfessions = (await getConfessions('comments', { limit: 2 })).confessions as Confession[];
       
       // Select 4 unique trending confessions
       const selectedConfessions = [];
@@ -173,7 +174,7 @@ export const UserDashboard = () => {
       
       setTrendingConfessions(selectedConfessions.slice(0, 4));
     } catch (error) {
-      console.error('Failed to fetch trending confessions:', error);
+      logger.error('Failed to fetch trending confessions:', error);
       // Use placeholders if API call fails
       setTrendingConfessions([
         "Someone out there thinks you're absolutely amazing ✨",

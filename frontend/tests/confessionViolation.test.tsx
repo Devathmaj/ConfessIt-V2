@@ -47,7 +47,9 @@ const post = (id: string, body: string) => ({
 });
 
 const violationError = (message: string) => {
-  const err: any = new Error(message);
+  const err = new Error(message) as Error & {
+    response: { status: number; data: { detail: string } };
+  };
   err.response = { status: 422, data: { detail: message } };
   return err;
 };
@@ -86,13 +88,13 @@ async function renderFeed() {
 describe('ConfessionsPage: violation popup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (api.getConfessions as any).mockResolvedValue({ confessions: [post('c1', 'first post')], total: 1, skip: 0, limit: 50 });
-    (api.getConfessionCooldown as any).mockResolvedValue({ status: 'eligible', message: '', cooldown_hours: 2, remaining_minutes: 0, remaining_seconds: 0 });
-    (api.searchConfessions as any).mockResolvedValue({ keyword: { items: [], total: 0 }, semantic: { items: [], status: 'ok' } });
+    vi.mocked(api.getConfessions).mockResolvedValue({ confessions: [post('c1', 'first post')], total: 1, skip: 0, limit: 50 });
+    vi.mocked(api.getConfessionCooldown).mockResolvedValue({ status: 'eligible', message: '', cooldown_hours: 2, remaining_minutes: 0, remaining_seconds: 0 });
+    vi.mocked(api.searchConfessions).mockResolvedValue({ keyword: { items: [], total: 0 }, semantic: { items: [], status: 'ok' } });
   });
 
   it('shows violation popup and does not render a flagged confession', async () => {
-    (api.createConfession as any).mockRejectedValue(
+    vi.mocked(api.createConfession).mockRejectedValue(
       violationError('Your confession was removed because it violated our content policies.')
     );
     await renderFeed();
@@ -110,10 +112,10 @@ describe('ConfessionsPage: violation popup', () => {
   });
 
   it('shows violation popup and does not render a flagged comment', async () => {
-    (api.createComment as any).mockRejectedValue(
+    vi.mocked(api.createComment).mockRejectedValue(
       violationError('Your comment was removed because it violated our content policies.')
     );
-    (api.getConfessionComments as any).mockResolvedValue({ comments: [], total: 0, skip: 0, limit: 10 });
+    vi.mocked(api.getConfessionComments).mockResolvedValue({ comments: [], total: 0, skip: 0, limit: 10 });
     await renderFeed();
 
     fireEvent.click(screen.getByRole('button', { name: /read in full/i }));
@@ -137,14 +139,14 @@ describe('ConfessionsPage: violation popup', () => {
 describe('ConfessionsPage: submissions are busy until the server answers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (api.getConfessions as any).mockResolvedValue({ confessions: [post('c1', 'first post')], total: 1, skip: 0, limit: 50 });
-    (api.getConfessionCooldown as any).mockResolvedValue({ status: 'eligible', message: '', cooldown_hours: 2, remaining_minutes: 0, remaining_seconds: 0 });
-    (api.searchConfessions as any).mockResolvedValue({ keyword: { items: [], total: 0 }, semantic: { items: [], status: 'ok' } });
+    vi.mocked(api.getConfessions).mockResolvedValue({ confessions: [post('c1', 'first post')], total: 1, skip: 0, limit: 50 });
+    vi.mocked(api.getConfessionCooldown).mockResolvedValue({ status: 'eligible', message: '', cooldown_hours: 2, remaining_minutes: 0, remaining_seconds: 0 });
+    vi.mocked(api.searchConfessions).mockResolvedValue({ keyword: { items: [], total: 0 }, semantic: { items: [], status: 'ok' } });
   });
 
   it('a second click while the confession is processing cannot post twice, and a failure re-enables the button', async () => {
     let rejectCreate!: (reason: unknown) => void;
-    (api.createConfession as any).mockImplementation(
+    vi.mocked(api.createConfession).mockImplementation(
       () => new Promise((_resolve, reject) => { rejectCreate = reject; }),
     );
     await renderFeed();
@@ -170,10 +172,10 @@ describe('ConfessionsPage: submissions are busy until the server answers', () =>
 
   it('a second click while the comment is processing cannot post it twice', async () => {
     let resolveComment!: (value: unknown) => void;
-    (api.createComment as any).mockImplementation(
+    vi.mocked(api.createComment).mockImplementation(
       () => new Promise((resolve) => { resolveComment = resolve; }),
     );
-    (api.getConfessionComments as any).mockResolvedValue({ comments: [], total: 0, skip: 0, limit: 10 });
+    vi.mocked(api.getConfessionComments).mockResolvedValue({ comments: [], total: 0, skip: 0, limit: 10 });
     await renderFeed();
 
     fireEvent.click(screen.getByRole('button', { name: /read in full/i }));

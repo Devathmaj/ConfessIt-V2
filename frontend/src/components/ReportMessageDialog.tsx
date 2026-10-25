@@ -1,4 +1,5 @@
 // src/components/ReportMessageDialog.tsx
+import { logger } from '@/lib/logger';
 import React, { useState } from 'react';
 import {
   Dialog,
@@ -13,6 +14,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { AlertTriangle } from 'lucide-react';
 import { reportMessage } from '@/lib/messaging';
+import { describeApiError } from '@/lib/apiError';
 import { REPORT_REASONS } from '@/lib/reportReasons';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
@@ -69,15 +71,15 @@ export const ReportMessageDialog: React.FC<ReportMessageDialogProps> = ({
       toast.success('Message reported successfully. Our team will review it.');
       onClose();
       setSelectedReason('');
-    } catch (error: any) {
-      console.error('Error reporting message:', error);
-      
+    } catch (error) {
+      logger.error('Error reporting message:', error);
+
+      const message = describeApiError(error, 'Failed to report message. Please try again.');
       // Check if it's a duplicate report error
-      if (error?.message?.includes('duplicate') || 
-          error?.message?.includes('already reported')) {
+      if (/duplicate|already reported/i.test(message)) {
         toast.error('You have already reported this message.');
       } else {
-        toast.error(error?.message || 'Failed to report message. Please try again.');
+        toast.error(message);
       }
     } finally {
       setIsSubmitting(false);

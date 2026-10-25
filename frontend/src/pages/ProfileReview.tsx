@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
@@ -1151,7 +1152,7 @@ export const ProfileReview = () => {
         setOrdinaryTotal(totalOf(ordinary, 0));
       } catch (error) {
         if (!cancelled) {
-          console.error('Failed to fetch profiles', error);
+          logger.error('Failed to fetch profiles', error);
           toast.error('Unable to load user profiles.');
         }
       } finally {
@@ -1579,7 +1580,7 @@ export const ProfileReview = () => {
       setOrdinaryRows(applyBlockState);
       toast.success(`User ${nextState ? 'blocked' : 'unblocked'} successfully.`);
     } catch (error) {
-      console.error('Failed to update block state', error);
+      logger.error('Failed to update block state', error);
       toast.error('Unable to update block status for this user.');
     } finally {
       setBlocking(null);
@@ -1735,7 +1736,7 @@ export const ProfileReview = () => {
       toast.success('Profile updated successfully.');
       resetEditor();
     } catch (error) {
-      console.error('Failed to update profile', error);
+      logger.error('Failed to update profile', error);
       // The same reasoning as the create handler: this payload is capped and forbidden from
       // extras, so a 422 here is routine and has to be readable. The editor writes the same
       // four identity fields the create dialog does, so it has the same ways to be wrong.
@@ -1817,7 +1818,7 @@ export const ProfileReview = () => {
       toast.success(`${ACCOUNT_TYPE_LABELS[createForm.account_type]} account created successfully.`);
       resetCreateDialog();
     } catch (error: unknown) {
-      console.error('Failed to create user', error);
+      logger.error('Failed to create user', error);
       // Not `error.response.data.detail` directly: a 422 carries an array of Pydantic error
       // objects there, and handing that to a toast renders objects as React children and takes
       // the page down. Every field is capped on the server and extras are forbidden, so this is
@@ -1880,7 +1881,7 @@ export const ProfileReview = () => {
       setBulkPreview(preview);
     } catch (error) {
       if (bulkPreviewRequest.current !== requestId) return;
-      console.error('Failed to preview participant file', error);
+      logger.error('Failed to preview participant file', error);
       setBulkPreviewError(
         error instanceof Error
           ? error.message
@@ -1926,7 +1927,7 @@ export const ProfileReview = () => {
       setFlaggedPage(0);
       setReloadToken((value) => value + 1);
     } catch (error) {
-      console.error('Failed to bulk upload participants', error);
+      logger.error('Failed to bulk upload participants', error);
       // Kept in the dialog rather than a toast: the server's refusal can name up to 25 rows
       // and fields, and an operator needs to read all of it while fixing the file.
       setBulkUploadError(

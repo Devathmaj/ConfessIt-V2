@@ -1,3 +1,4 @@
+import { logger } from './logger';
 // src/lib/tokenStore.ts
 
 /**
@@ -43,7 +44,7 @@ const announce = (token: string | null): void => {
     try {
       listener(token);
     } catch (error) {
-      console.error('Access token listener failed:', error);
+      logger.error('Access token listener failed:', error);
     }
   });
 };

@@ -1,5 +1,6 @@
 // src/pages/StaffNotificationsPage.tsx
 
+import { logger } from '@/lib/logger';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -104,7 +105,7 @@ export const StaffNotificationsPage = () => {
         await readPage(0);
       } catch (error) {
         if (!active) return;
-        console.error('Failed to load staff notifications', error);
+        logger.error('Failed to load staff notifications', error);
         toast.error('Unable to load notifications right now.');
       } finally {
         if (active) setLoading(false);
@@ -132,7 +133,7 @@ export const StaffNotificationsPage = () => {
         result.notifications_enabled ? 'Notifications enabled.' : 'Notifications disabled.',
       );
     } catch (error) {
-      console.error('Failed to flip the notification switch', error);
+      logger.error('Failed to flip the notification switch', error);
       toast.error('Could not update the notification setting.');
     } finally {
       setSavingSwitch(null);
@@ -149,7 +150,7 @@ export const StaffNotificationsPage = () => {
       setPreferences(result.preferences);
       toast.success('Preference saved.');
     } catch (error) {
-      console.error('Failed to save notification preference', error);
+      logger.error('Failed to save notification preference', error);
       toast.error('Could not save that preference.');
     } finally {
       setSavingSwitch(null);
@@ -162,7 +163,7 @@ export const StaffNotificationsPage = () => {
       await markStaffNotificationRead(notice.id);
       setNotifications((prev) => prev.map((n) => (n.id === notice.id ? { ...n, is_read: true } : n)));
     } catch (error) {
-      console.error('Failed to mark notification as read', error);
+      logger.error('Failed to mark notification as read', error);
       toast.error('Could not mark that notification as read.');
     }
   };
@@ -395,7 +396,7 @@ export const StaffNotificationsPage = () => {
                 setLoadingMore(true);
                 readPage(fetched)
                   .catch((error) => {
-                    console.error('Failed to load more notifications', error);
+                    logger.error('Failed to load more notifications', error);
                     toast.error('Could not load more notifications.');
                   })
                   .finally(() => setLoadingMore(false));

@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -29,7 +30,7 @@ import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { isEqual } from 'lodash';
 import { INTEREST_VALUES, toInterests } from '@/lib/accountFields';
-import { describeApiError } from '@/lib/apiError';
+import { describeApiError, apiErrorStatus, describeApiErrorDetail } from '@/lib/apiError';
 import { ACCEPT_ATTRIBUTE, validateImageFile } from '@/lib/imageFile';
 import {
   PICTURE_COOLDOWN_DAYS,
@@ -74,10 +75,9 @@ export const ProfilePage = () => {
   // that scrolls away.
   const [violationDialog, setViolationDialog] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
 
-  const readViolationMessage = (error: any): string | null => {
-    const detail = error?.response?.data?.detail;
-    const text = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.join(' ') : '';
-    if (error?.response?.status === 422 && /violat.*polic/i.test(text)) return text;
+  const readViolationMessage = (error: unknown): string | null => {
+    const text = describeApiErrorDetail(error) ?? '';
+    if (apiErrorStatus(error) === 422 && /violat.*polic/i.test(text)) return text;
     return null;
   };
 
@@ -199,7 +199,7 @@ export const ProfilePage = () => {
           toast.error(describeApiError(error, 'Failed to upload profile picture.'));
         }
       }
-      console.error(error);
+      logger.error(error);
     } finally {
       setIsUploadingPicture(false);
     }
@@ -223,7 +223,7 @@ export const ProfilePage = () => {
       setHasUnsavedChanges(false); // Reset unsaved changes flag
     } catch (error) {
       toast.error('Failed to update profile.');
-      console.error(error);
+      logger.error(error);
     }
   };
 

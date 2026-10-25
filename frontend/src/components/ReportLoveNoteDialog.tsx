@@ -1,4 +1,5 @@
 // src/components/ReportLoveNoteDialog.tsx
+import { logger } from '@/lib/logger';
 import React, { useState } from 'react';
 import {
   Dialog,
@@ -14,7 +15,7 @@ import { Label } from '@/components/ui/label';
 import { AlertTriangle } from 'lucide-react';
 import { reportLoveNote } from '@/services/api';
 import { REPORT_REASONS } from '@/lib/reportReasons';
-import { describeApiError } from '@/lib/apiError';
+import { apiErrorStatus, describeApiError } from '@/lib/apiError';
 import { toast } from 'sonner';
 
 interface ReportLoveNoteDialogProps {
@@ -57,12 +58,12 @@ export const ReportLoveNoteDialog: React.FC<ReportLoveNoteDialogProps> = ({
       onReported(noteId);
       onClose();
       setSelectedReason('');
-    } catch (error: any) {
-      console.error('Error reporting love note:', error);
+    } catch (error) {
+      logger.error('Error reporting love note:', error);
 
       // The server owns the duplicate rule, so it is the one that decides whether this
       // account has already reported the note; the client just reflects the answer.
-      if (error?.response?.status === 409) {
+      if (apiErrorStatus(error) === 409) {
         toast.error('You have already reported this love note.');
         onReported(noteId);
         onClose();

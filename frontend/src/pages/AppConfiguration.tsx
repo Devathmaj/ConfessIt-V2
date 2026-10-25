@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 import { AdminNavigation } from '@/components/AdminNavigation';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -76,7 +77,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
           }
         }
       } catch (error) {
-        console.error('Failed to fetch configuration:', error);
+        logger.error('Failed to fetch configuration:', error);
       } finally {
         setIsLoading(false);
       }
@@ -253,7 +254,7 @@ const [saveError, setSaveError] = useState<string | null>(null);
       setSaveError(null);
       setTimeout(() => setSaveStatus('idle'), 3000);
     } catch (error) {
-      console.error('Failed to save configuration:', error);
+      logger.error('Failed to save configuration:', error);
       setSaveStatus('error');
       // Kept, not just logged. A save that deletes the old configuration and then fails partway
       // leaves the operator looking at a screen that no longer matches the database, and "please

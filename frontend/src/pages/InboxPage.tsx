@@ -1,5 +1,6 @@
 // src/pages/InboxPage.tsx
 
+import { logger } from '@/lib/logger';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
@@ -75,6 +76,33 @@ interface NotificationItem {
   // Absent on both for a purely informational notice, which is then not clickable.
   target_kind?: string | null;
   target_id?: string | null;
+}
+
+/** One row as the notifications endpoint writes it. */
+interface NotificationRow {
+  id: string;
+  heading: string;
+  body: string;
+  created_at: string;
+  target_kind?: string | null;
+  target_id?: string | null;
+}
+
+/** One received request, as the conversations endpoint describes it. */
+interface ReceivedConversation {
+  other_user: {
+    name: string;
+    profile_picture_url?: string | null;
+  };
+  match: {
+    id: string;
+  };
+  conversation: {
+    id: string;
+    status: ConversationStatus;
+    created_at: string;
+    accepted_at?: string | null;
+  };
 }
 
 /**
@@ -154,7 +182,7 @@ export const InboxPage = () => {
       setLoading(true);
       await fetchNotifications(0, INBOX_PAGE_SIZE, appliedSearch);
     } catch (error) {
-      console.error('Failed to fetch data:', error);
+      logger.error('Failed to fetch data:', error);
     } finally {
       setLoading(false);
     }
@@ -188,7 +216,7 @@ export const InboxPage = () => {
     try {
       await fetchNotifications(systemFetched, INBOX_PAGE_SIZE, appliedSearch);
     } catch (error) {
-      console.error('Failed to load more notifications:', error);
+      logger.error('Failed to load more notifications:', error);
     } finally {
       setLoadingMore(false);
     }
@@ -200,12 +228,12 @@ export const InboxPage = () => {
    * went nowhere, so the screen falls back to the single-list behaviour it had before
    * paging existed.
    */
-  const splitSystemPage = (answer: unknown) => {
+  const splitSystemPage = (answer: unknown): { rows: NotificationRow[]; total: number; enveloped: boolean } => {
     if (Array.isArray(answer)) {
-      const rows = answer as unknown[];
+      const rows = answer as NotificationRow[];
       return { rows, total: rows.length, enveloped: false };
     }
-    const rows = (answer as { notifications?: unknown[] } | null | undefined)?.notifications;
+    const rows = (answer as { notifications?: NotificationRow[] } | null | undefined)?.notifications;
     const list = Array.isArray(rows) ? rows : [];
     const total = (answer as { total?: unknown } | null | undefined)?.total;
     return {
@@ -235,7 +263,7 @@ export const InboxPage = () => {
 
       // 1. System notifications (match found, love notes, etc.)
       if (systemPage.rows) {
-        systemPage.rows.forEach((notification: any) => {
+        systemPage.rows.forEach((notification) => {
           // A conversation is represented by the conversation itself, which carries a single
           // status that advances requested -> accepted/rejected and can then be terminated by
           // a moderator. The row written to the notifications table when that happens is a
@@ -320,8 +348,12 @@ export const InboxPage = () => {
       }
 
       // 3. For RECEIVER: one notification per request, whatever the current status.
-      if (receivedConversationsResponse.status === 'success' && receivedConversationsResponse.conversations) {
-        receivedConversationsResponse.conversations.forEach((conv: any) => {
+      const received = receivedConversationsResponse as {
+        status?: string;
+        conversations?: ReceivedConversation[];
+      };
+      if (received.status === 'success' && received.conversations) {
+        received.conversations.forEach((conv) => {
           // Same conversation fields in every state, so the card is the same card and only
           // the part describing the outcome changes.
           // Every one of these cards points at the same match, so the target is set once here
@@ -400,8 +432,8 @@ export const InboxPage = () => {
       setSystemTotal(systemPage.total);
       setPagedInbox(systemPage.enveloped);
       setDerivedCards(notifications);
-    } catch (error: any) {
-      console.error('Failed to fetch notifications:', error);
+    } catch (error) {
+      logger.error('Failed to fetch notifications:', error);
       if (skip === 0) {
         setSystemNotices([]);
         setDerivedCards([]);
@@ -695,7 +727,7 @@ const filtersNarrowed = activeSearch !== '';
                                     await acceptConversation(notification.match_id!);
                                     toast.success('Conversation accepted!');
                                     fetchData();
-                                  } catch (error: any) {
+                                  } catch (error) {
                                     toast.error('Failed to accept conversation');
                                   }
                                 }}
@@ -713,7 +745,7 @@ const filtersNarrowed = activeSearch !== '';
                                     await rejectConversation(notification.match_id!);
                                     toast.success('Conversation rejected');
                                     fetchData();
-                                  } catch (error: any) {
+                                  } catch (error) {
                                     toast.error('Failed to reject conversation');
                                   }
                                 }}

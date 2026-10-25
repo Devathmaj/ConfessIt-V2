@@ -1,5 +1,6 @@
 // src/pages/MessageBoxPage.tsx
 
+import { logger } from '@/lib/logger';
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { parseTimestamp, timestampMs } from '@/lib/utils';
@@ -166,7 +167,7 @@ export const MessageBoxPage = () => {
 
       setConversations(allConversations);
     } catch (error) {
-      console.error('Failed to fetch conversations:', error);
+      logger.error('Failed to fetch conversations:', error);
       toast.error('Failed to load messages');
       setConversations([]);
     } finally {
@@ -212,7 +213,7 @@ export const MessageBoxPage = () => {
         toast.error('That conversation is no longer available');
       }
     } catch (error) {
-      console.error('Failed to fetch conversation:', error);
+      logger.error('Failed to fetch conversation:', error);
       toast.error('That conversation is no longer available');
     }
   };

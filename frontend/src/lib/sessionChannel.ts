@@ -1,3 +1,4 @@
+import { logger } from './logger';
 // src/lib/sessionChannel.ts
 
 /**
@@ -46,7 +47,7 @@ const ensureChannel = (): BroadcastChannel | null => {
         listener();
       } catch (error) {
         // One tab's bad day must not stop the others from hearing about it.
-        console.error('Session-ended listener failed:', error);
+        logger.error('Session-ended listener failed:', error);
       }
     });
   };
@@ -65,7 +66,7 @@ export const announceSessionEnded = (): void => {
   try {
     active.postMessage({ type: 'session-ended' } satisfies SessionEndedMessage);
   } catch (error) {
-    console.error('Could not announce the session end:', error);
+    logger.error('Could not announce the session end:', error);
   }
 };
 

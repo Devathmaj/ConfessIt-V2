@@ -197,11 +197,10 @@ const SignInPage = ({ category }: { category: SignInCategory }) => {
   // The annotation says what the function actually returns (the response plus its
   // parsed body, `null` when the body is not JSON): callers destructure both, so the
   // previous `Promise<void>` was simply wrong, not a contract anyone relied on. The
-  // body stays `any` -- it is unshaped JSON, and every reader already narrows what it
-  // touches with `typeof` checks.
+  // body is unshaped JSON, typed only for the one field callers read.
   const requestLink = async (
     regnoToSend: string
-  ): Promise<{ response: Response; body: any }> => {
+  ): Promise<{ response: Response; body: { expires_at?: unknown } | null }> => {
     const response = await fetch(magicLinkEndpoint(category.accountType), {
       method: 'POST',
       headers: {

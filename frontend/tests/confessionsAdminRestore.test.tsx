@@ -53,7 +53,7 @@ const manualConfession = {
   removed_by_regno: 'moduser',
 };
 
-function renderPage(rows: any[]) {
+function renderPage() {
   return render(
     <AuthContext.Provider
       value={
@@ -81,11 +81,11 @@ async function expandFirstRow() {
 describe('ConfessionsAdmin: restore Azure-hidden content', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (api.getAdminConfessions as any).mockResolvedValue([azureConfession]);
+    vi.mocked(api.getAdminConfessions).mockResolvedValue([azureConfession]);
   });
 
   it('labels Azure removals and offers restore', async () => {
-    renderPage([]);
+    renderPage();
     await screen.findByText('azure hidden post');
     await expandFirstRow();
     expect(screen.getByText(/Content Removed by Azure Content Safety/)).toBeInTheDocument();
@@ -93,8 +93,8 @@ describe('ConfessionsAdmin: restore Azure-hidden content', () => {
   });
 
   it('warns users will now be able to see this before restoring', async () => {
-    (api.unhideAdminConfession as any).mockResolvedValue({ id: azureConfession.id, content_removed: false });
-    renderPage([]);
+    vi.mocked(api.unhideAdminConfession).mockResolvedValue({ id: azureConfession.id, content_removed: false });
+    renderPage();
     await screen.findByText('azure hidden post');
     await expandFirstRow();
     fireEvent.click(screen.getByRole('button', { name: /restore confession/i }));
@@ -107,8 +107,8 @@ describe('ConfessionsAdmin: restore Azure-hidden content', () => {
   });
 
   it('does not offer restore for moderator hides', async () => {
-    (api.getAdminConfessions as any).mockResolvedValue([manualConfession]);
-    renderPage([]);
+    vi.mocked(api.getAdminConfessions).mockResolvedValue([manualConfession]);
+    renderPage();
     await screen.findByText('moderator hidden post');
     await expandFirstRow();
     expect(screen.getByText(/cannot be restored here/i)).toBeInTheDocument();

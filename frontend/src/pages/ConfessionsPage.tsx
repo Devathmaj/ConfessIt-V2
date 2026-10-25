@@ -1,10 +1,10 @@
+import { logger } from '@/lib/logger';
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { FloralDecor } from '@/components/FloralDecor';
 import { ScatteredIcons } from '@/components/ScatteredIcons';
@@ -34,7 +34,7 @@ import { Navigation } from '@/components/Navigation';
 import { ConfessionBody } from '@/components/ConfessionBody';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { formatDateTimeDDMMYYYY } from '@/lib/utils';
-import { describeApiError } from '@/lib/apiError';
+import { describeApiError, apiErrorStatus, describeApiErrorDetail } from '@/lib/apiError';
 import {
   formatCooldownRemaining,
   readCooldownRejection,
@@ -220,10 +220,9 @@ export const ConfessionsPage = () => {
   const [violationDialog, setViolationDialog] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
   const { user, isAuthenticated } = useAuth();
 
-  const readViolationMessage = (error: any): string | null => {
-    const detail = error?.response?.data?.detail;
-    const text = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.join(' ') : '';
-    if (error?.response?.status === 422 && /violat.*polic/i.test(text)) return text;
+  const readViolationMessage = (error: unknown): string | null => {
+    const text = describeApiErrorDetail(error) ?? '';
+    if (apiErrorStatus(error) === 422 && /violat.*polic/i.test(text)) return text;
     return null;
   };
 
@@ -338,7 +337,7 @@ export const ConfessionsPage = () => {
       } catch (error) {
         if (!cancelled) {
           toast.error("Failed to load confessions. Please try again.");
-          console.error(error);
+          logger.error(error);
         }
       }
     };
@@ -358,10 +357,9 @@ export const ConfessionsPage = () => {
     window.scrollTo(0, lock.y);
   }, [confessions.length]);
 
-  const readSearchError = (error: any): string => {
-    const status = error?.response?.status;
-    const detail = error?.response?.data?.detail;
-    const text = typeof detail === 'string' && detail.trim() ? detail : '';
+  const readSearchError = (error: unknown): string => {
+    const status = apiErrorStatus(error);
+    const text = describeApiErrorDetail(error) ?? '';
     if (status === 422) {
       return text || 'Please enter a search phrase up to 1000 characters.';
     }
@@ -398,17 +396,17 @@ export const ConfessionsPage = () => {
       const result = await searchConfessions(query, FEED_PAGE_SIZE, { signal: controller.signal });
       // A slow answer must never overwrite a newer one.
       if (searchRequestId.current !== id) return;
-      setKeywordResults(result.keyword?.items ?? []);
+      setKeywordResults((result.keyword?.items ?? []) as Confession[]);
       setKeywordTotal(result.keyword?.total ?? 0);
-      setSemanticResults(result.semantic?.items ?? []);
+      setSemanticResults((result.semantic?.items ?? []) as Confession[]);
       setSemanticStatus(result.semantic?.status ?? 'unavailable');
       setActiveSearch(result.query || query);
-    } catch (error: any) {
+    } catch (error) {
       if (controller.signal.aborted || searchRequestId.current !== id) return;
       const message = readSearchError(error);
       setSearchError(message);
       toast.error(message);
-      console.error(error);
+      logger.error(error);
     } finally {
       if (searchRequestId.current === id) setIsSearching(false);
     }
@@ -475,7 +473,7 @@ export const ConfessionsPage = () => {
       setPagedFeed(page.enveloped);
     } catch (error) {
       toast.error('Failed to load confessions. Please try again.');
-      console.error(error);
+      logger.error(error);
     }
   };
 
@@ -495,21 +493,21 @@ export const ConfessionsPage = () => {
    */
   const snapshotOf = (confessionId: string) => ({
     feed: confessions.find((c) => c.id === confessionId) ?? null,
-    keyword: keywordResults.find((c) => c.id === conversationId) ?? null,
-    semantic: semanticResults.find((c) => c.id === conversationId) ?? null,
+    keyword: keywordResults.find((c) => c.id === confessionId) ?? null,
+    semantic: semanticResults.find((c) => c.id === confessionId) ?? null,
   });
 
   /** Put one post back the way the snapshot found it, in every list that holds it. */
   const restoreOf = (confessionId: string, snap: ReturnType<typeof snapshotOf>) => {
     const { feed, keyword, semantic } = snap;
     if (feed) {
-      setConfessions((prev) => prev.map((c) => (c.id === conversationId ? feed : c)));
+      setConfessions((prev) => prev.map((c) => (c.id === confessionId ? feed : c)));
     }
     if (keyword) {
-      setKeywordResults((prev) => prev.map((c) => (c.id === conversationId ? keyword : c)));
+      setKeywordResults((prev) => prev.map((c) => (c.id === confessionId ? keyword : c)));
     }
     if (semantic) {
-      setSemanticResults((prev) => prev.map((c) => (c.id === conversationId ? semantic : c)));
+      setSemanticResults((prev) => prev.map((c) => (c.id === confessionId ? semantic : c)));
     }
   };
 
@@ -584,7 +582,7 @@ export const ConfessionsPage = () => {
       setPagedFeed(page.enveloped);
     } catch (error) {
       toast.error("Failed to load more confessions. Please try again.");
-      console.error(error);
+      logger.error(error);
     } finally {
       setLoadingMore(false);
     }
@@ -616,14 +614,16 @@ export const ConfessionsPage = () => {
         sort,
       });
       const rows = (
-        Array.isArray(answer as unknown) ? (answer as unknown as ConfessionComment[]) : answer.comments
+        Array.isArray(answer as unknown)
+          ? (answer as unknown as ConfessionComment[])
+          : (answer.comments as ConfessionComment[])
       );
       // The same drift the feed has: a reply inserted above the window shifts the
       // offset, and one removed above it steps a row over. The window is re-read
       // rather than appended into, which keeps the reader's place in the thread.
       const totalAfter = Array.isArray(answer as unknown)
         ? selectedConfession.comment_count ?? 0
-        : ((answer as { total?: unknown }).total ?? selectedConfession.comment_count ?? 0);
+        : ((answer as { total?: number }).total ?? selectedConfession.comment_count ?? 0);
       if (windowHasDrifted(held, rows, selectedConfession.comment_count ?? 0, totalAfter)) {
         const reread = await rereadWindow<ConfessionComment>(
           held.length,
@@ -633,11 +633,11 @@ export const ConfessionsPage = () => {
             const pageRows = (
               Array.isArray(page as unknown)
                 ? (page as unknown as ConfessionComment[])
-                : page.comments
+                : (page.comments as ConfessionComment[])
             );
             const pageTotal = Array.isArray(page as unknown)
               ? pageRows.length
-              : ((page as { total?: unknown }).total ?? pageRows.length);
+              : ((page as { total?: number }).total ?? pageRows.length);
             return { rows: pageRows, total: pageTotal };
           },
         );
@@ -661,7 +661,7 @@ export const ConfessionsPage = () => {
       );
     } catch (error) {
       toast.error("Failed to load more comments. Please try again.");
-      console.error(error);
+      logger.error(error);
     } finally {
       setLoadingMoreComments(false);
     }
@@ -688,7 +688,9 @@ export const ConfessionsPage = () => {
         sort,
       });
       const fetched = (
-        Array.isArray(answer as unknown) ? (answer as unknown as ConfessionComment[]) : answer.comments
+        Array.isArray(answer as unknown)
+          ? (answer as unknown as ConfessionComment[])
+          : (answer.comments as ConfessionComment[])
       );
       // Legacy answers ignore the params and hand back one unordered list, so the toggle
       // orders it here; server pages arrive in the order that was asked for.
@@ -701,7 +703,7 @@ export const ConfessionsPage = () => {
       );
     } catch (error) {
       toast.error("Failed to reorder comments. Please try again.");
-      console.error(error);
+      logger.error(error);
     }
   };
 
@@ -733,7 +735,9 @@ export const ConfessionsPage = () => {
           sort: commentSort,
         });
         const rows = (
-          Array.isArray(answer as unknown) ? (answer as unknown as ConfessionComment[]) : answer.comments
+          Array.isArray(answer as unknown)
+            ? (answer as unknown as ConfessionComment[])
+            : (answer.comments as ConfessionComment[])
         );
         const total = Array.isArray(answer as unknown)
           ? undefined
@@ -767,7 +771,7 @@ export const ConfessionsPage = () => {
 
       setNewComment('');
       toast.success("Your comment has been posted!");
-    } catch (error: any) {
+    } catch (error) {
       const violation = readViolationMessage(error);
       if (violation) {
         // Flagged+hidden: never render the returned row (there is none on
@@ -777,9 +781,10 @@ export const ConfessionsPage = () => {
         setViolationDialog({ open: true, message: violation });
         return;
       }
-      if (error.response && error.response.status === 403) {
+      const status = apiErrorStatus(error);
+      if (status === 403) {
         toast.error("Comments are disabled for this confession.");
-      } else if (error.response && error.response.status === 400) {
+      } else if (status === 400) {
         toast.error("You have reached your comment limit for this post (3 comments).");
       } else {
         toast.error("Failed to post comment. Please try again.");
@@ -1148,7 +1153,7 @@ export const ConfessionsPage = () => {
       setConfessionToEdit(null);
     } catch (error) {
       toast.error("Failed to update confession. Please try again.");
-      console.error(error);
+      logger.error(error);
     }
   };
 
@@ -1229,9 +1234,6 @@ export const ConfessionsPage = () => {
             </p>
           </div>
         )}
-        <div className="flex items-center gap-2 sm:gap-4 mb-4 sm:mb-6">
-          <CountdownTimer />
-        </div>
         <div className="relative z-10 text-center mb-6 sm:mb-8 px-2">
           <h1 className="header-halo text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing text-romantic mb-2 sm:mb-4 break-words">
             Anonymous Confessions 💌

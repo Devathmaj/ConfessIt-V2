@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -216,7 +217,7 @@ export const LoveNotesReview = () => {
         }
       } catch (error) {
         if (active && !cancelled.current) {
-          console.error('Failed to load love notes', error);
+          logger.error('Failed to load love notes', error);
           toast.error('Unable to load love notes for review.');
         }
       } finally {
@@ -305,7 +306,7 @@ export const LoveNotesReview = () => {
         [status]: { items: [...prev[status].items, ...window.items], total: window.total },
       }));
     } catch (error) {
-      console.error('Failed to load more love notes', error);
+      logger.error('Failed to load more love notes', error);
       toast.error('Unable to load more love notes.');
     } finally {
       setLoadingMore(null);
@@ -336,7 +337,7 @@ export const LoveNotesReview = () => {
         return next;
       });
     } catch (error) {
-      console.error('Failed to refresh love notes', error);
+      logger.error('Failed to refresh love notes', error);
       toast.error('Unable to refresh the love notes.');
     } finally {
       setRefreshing(false);
@@ -369,7 +370,7 @@ export const LoveNotesReview = () => {
       }
       toast.success(status === 'approved' ? 'Love note approved.' : 'Love note hidden from the recipient.');
     } catch (error) {
-      console.error('Failed to update love note', error);
+      logger.error('Failed to update love note', error);
       toast.error('Unable to update this love note.');
     }
   };
@@ -421,7 +422,7 @@ export const LoveNotesReview = () => {
       setLegacyRows((prev) => (prev ? patch(prev) : prev));
       toast.success('Privacy-safe preview generated.');
     } catch (error) {
-      console.error('Failed to generate the moderation preview', error);
+      logger.error('Failed to generate the moderation preview', error);
       toast.error('Unable to generate the moderation preview. Please try again shortly.');
     } finally {
       setRedacting(null);

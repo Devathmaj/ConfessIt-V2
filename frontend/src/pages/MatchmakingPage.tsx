@@ -1,10 +1,10 @@
 // src/pages/MatchmakingPage.tsx
 
+import { logger } from '@/lib/logger';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth, User } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { CountdownTimer } from '@/components/ui/countdown-timer';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { FloralDecor } from '@/components/FloralDecor';
 import { findMatch, checkMatchmakingStatus, requestConversation, getCurrentConversation } from '@/services/api';
@@ -34,7 +34,7 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { serverNow } from '@/lib/serverClock';
-import { describeApiError } from '@/lib/apiError';
+import { describeApiError, apiErrorStatus } from '@/lib/apiError';
 
 // Pre-written messages for quick chat options
 const prewrittenMessages = [
@@ -567,10 +567,10 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
     setCohortBlock(cohortBlock);
     setCooldownKnown(true);
     return { known: true, remaining, cohortBlock };
-  } catch (error: any) {
+  } catch (error) {
     // The previous state stands and the draw endpoint still refuses a real cooldown with the
     // real remaining time, so nothing is lost by reporting the failure instead of guessing.
-    console.error("Failed to check matchmaking status:", error.response?.data?.detail || error.message);
+    logger.error("Failed to check matchmaking status:", error);
     setCooldownKnown(false);
     return UNANSWERED_COOLDOWN;
   }
@@ -624,8 +624,8 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
         setConversationStatus('none');
         notifyExpiredMatch(response.match.id, knownCooldown);
       }
-    } catch (error: any) {
-      console.error('Failed to check for existing conversation:', error);
+    } catch (error) {
+      logger.error('Failed to check for existing conversation:', error);
       setHasActiveConversation(false);
       setConversationStatus('none');
     }
@@ -645,10 +645,10 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
    * Updates conversation from 'pending' to 'requested' and notifies receiver
    */
   const handleSendMessageRequest = async () => {
-    console.log("matchedProfile:", matchedProfile);
+    logger.log("matchedProfile:", matchedProfile);
     if (!matchedProfile?.match_id) {
         toast.error("Cannot send message request: Match ID is missing.");
-        console.log("match_id is missing from:", matchedProfile);
+        logger.log("match_id is missing from:", matchedProfile);
         return;
     }
     // One request per click: the button is disabled while this runs, and the guard
@@ -656,12 +656,12 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
     if (isRequesting) return;
     setIsRequesting(true);
     try {
-        console.log("Sending message request with match_id:", matchedProfile.match_id);
+        logger.log("Sending message request with match_id:", matchedProfile.match_id);
         await requestConversation(matchedProfile.match_id);
         toast.success(`Message request sent to ${matchedProfile.name}!`);
         setConversationStatus('requested');
         await refreshConversationStatus(); // Refresh to get updated status
-    } catch (error: any) {
+    } catch (error) {
         toast.error(describeApiError(error, "Failed to send message request."));
     } finally {
         setIsRequesting(false);
@@ -764,8 +764,8 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
         return;
       }
       setShowConfirmationDialog(true);
-    } catch (error: any) {
-      if (error.response?.status === 429) {
+    } catch (error) {
+      if (apiErrorStatus(error) === 429) {
         // The draw endpoint is the last word on the wait, so its own message is what is shown.
         toast.info(describeApiError(error, "You have drawn recently. Please try again later."));
       } else {
@@ -832,7 +832,7 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
               }
               
               // Immediately show the matched profile
-              console.log('Setting matched profile:', newMatchedProfile);
+              logger.log('Setting matched profile:', newMatchedProfile);
             })
             .catch(async error => {
               // The server's own reason, which distinguishes the two cases that matter here:
@@ -902,7 +902,6 @@ const fetchCooldown = useCallback(async (): Promise<CooldownCheck> => {
             <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-dancing page-heading mb-2 break-words">Random Matchmaking 💕</h1>
             <p className="text-sm sm:text-base md:text-xl status-hint break-words">Find your perfect Valentine match!</p>
           </div>
-          <CountdownTimer />
         </div>
       </div>
 

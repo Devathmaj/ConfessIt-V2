@@ -333,7 +333,6 @@ export const AdminTriviaDropManage = () => {
       setLive(null);
     }
     // `splitPage` is stateless; listing it would refetch on every append.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

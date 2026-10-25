@@ -77,9 +77,9 @@ async function expandCard() {
 describe('ReportsReview: restore Azure-hidden content', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (api.getAdminConfessionReports as any).mockResolvedValue({ reports: [azureReport], total: 1, skip: 0, limit: 50 });
-    (api.getAdminLoveNoteReports as any).mockResolvedValue(emptyQueue);
-    (api.getAdminMessageReports as any).mockResolvedValue(emptyQueue);
+    vi.mocked(api.getAdminConfessionReports).mockResolvedValue({ reports: [azureReport], total: 1, skip: 0, limit: 50 });
+    vi.mocked(api.getAdminLoveNoteReports).mockResolvedValue(emptyQueue);
+    vi.mocked(api.getAdminMessageReports).mockResolvedValue(emptyQueue);
   });
 
   it('labels Azure removals and offers restore', async () => {
@@ -90,7 +90,7 @@ describe('ReportsReview: restore Azure-hidden content', () => {
   });
 
   it('warns users will now be able to see this before restoring', async () => {
-    (api.unhideAdminConfession as any).mockResolvedValue({ id: azureReport.target_id, content_removed: false });
+    vi.mocked(api.unhideAdminConfession).mockResolvedValue({ id: azureReport.target_id, content_removed: false });
     renderPage();
     await screen.findByText(/Content removed by Azure Content Safety/);
     await expandCard();

@@ -1,5 +1,6 @@
 // src/contexts/AuthContext.tsx
 
+import { logger } from '@/lib/logger';
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { getCurrentUser, serverLogout, setInMemoryToken, clearInMemoryToken, isTokenRejected } from '../services/api';
@@ -265,13 +266,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (applyAccount(userData)) {
         return 'read';
       }
-      console.error("User ID is missing from the authentication response.");
+      logger.error("User ID is missing from the authentication response.");
       void logout();
       return 'rejected';
     } catch (error) {
       if (isTokenRejected(error)) {
         // The server refused the token: the session is over, and it has to end.
-        console.error("The access token was rejected; ending the session.");
+        logger.error("The access token was rejected; ending the session.");
         void logout();
         return 'rejected';
       }
@@ -279,7 +280,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // while the backend is deploying. The token was never judged, so the session is
       // still alive -- and ending it here would revoke it server-side too, signing the
       // person out for good over a backend having a bad moment.
-      console.error("Could not read the signed-in account; the session is kept:", error);
+      logger.error("Could not read the signed-in account; the session is kept:", error);
       return 'unavailable';
     }
   }, [applyAccount, logout]);
@@ -341,7 +342,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   // own, which is why nothing here needs the router.
   useEffect(() => {
     const handleAuthExpired = () => {
-      console.warn('Access token was rejected as expired. Ending session.');
+      logger.warn('Access token was rejected as expired. Ending session.');
       void logout();
     };
 
@@ -356,7 +357,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const handleSessionSuperseded = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail;
-      console.warn('Access token was rejected because the session was replaced by a new login.', detail);
+      logger.warn('Access token was rejected because the session was replaced by a new login.', detail);
       void logout();
       toast.error(detail);
     };
@@ -377,7 +378,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       });
 
       if (!response.ok) {
-        console.error("Magic token verification failed with status:", response.status);
+        logger.error("Magic token verification failed with status:", response.status);
         setIsLoading(false);
         return { success: false };
       }
@@ -387,7 +388,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const redirectUrl = data.redirect_url;
 
       if (!accessToken || !redirectUrl) {
-        console.error("Access token or redirect URL missing in response.");
+        logger.error("Access token or redirect URL missing in response.");
         setIsLoading(false);
         return { success: false };
       }
@@ -399,7 +400,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setIsLoading(false);
       return { success: true, redirectUrl };
     } catch (error) {
-      console.error('Magic token verification failed:', error);
+      logger.error('Magic token verification failed:', error);
       setIsLoading(false);
       return { success: false };
     }
