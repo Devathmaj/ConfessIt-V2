@@ -1356,10 +1356,6 @@ export const ConfessionsPage = () => {
                     onChange={(e) => setConfessingTo(e.target.value)}
                     className="bg-background/80 border-romantic/30 focus:border-romantic"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Add a name if this is for someone. Moderators use it to check the confession
-                    reaches the right person; a confession you just want to share does not need one.
-                  </p>
                 </div>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">

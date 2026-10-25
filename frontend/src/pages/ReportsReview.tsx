@@ -984,11 +984,7 @@ export const ReportsReview = () => {
         <header className="flex flex-col gap-2">
           <h1 className="text-3xl font-semibold">Reports Review</h1>
           <p className="text-sm text-muted-foreground">
-            Everything a participant has reported, in the three places they can report
-            something. Dismiss a report and the content stays up. Remove content and it leaves
-            every participant-facing view for good — the record of it is kept so the decision
-            can be audited — and both the person who wrote it and the person who reported it are
-            told what happened.
+            All participant reports across three reporting points. Dismiss keeps content visible; removal hides it from all participant-facing views while preserving an audit record. Both the author and reporter are notified of the outcome.
           </p>
         </header>
 

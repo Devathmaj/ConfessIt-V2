@@ -58,8 +58,8 @@ export const systemPrefersDark = (): boolean =>
   window.matchMedia('(prefers-color-scheme: dark)').matches;
 
 const FALLBACK_THEME: ThemeContextValue = {
-  theme: 'dark',
-  resolvedTheme: 'dark',
+  theme: 'light',
+  resolvedTheme: 'light',
   setTheme: () => undefined,
 };
 

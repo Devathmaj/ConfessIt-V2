@@ -843,13 +843,7 @@ export const ConfessionsAdmin = () => {
         <header className="flex flex-col gap-2">
           <h1 className="text-3xl font-semibold">Confession Review</h1>
           <p className="text-sm text-muted-foreground">
-            Review every confession, act on its reports and comments, and hide harmful submissions.
-            Hiding takes a confession or a single comment out of public view and cannot be undone;
-            the post stays here as a record and its author is told it was removed. Hiding here
-            never cites a policy -- only a ruling on the Reports page does that. An anonymous
-            confession is anonymous here too, so action it on what was written. Each confession is
-            collapsed to the line a reviewer triages on; expand one to read it in full and act on
-            it.
+            Review confessions and comments, hide harmful content, and notify authors. Hiding is irreversible and logged. Policy rulings belong on the Reports page; anonymous posts stay anonymous.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-xs text-muted-foreground/80">

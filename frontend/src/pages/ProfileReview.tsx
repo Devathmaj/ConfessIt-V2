@@ -1352,7 +1352,7 @@ export const ProfileReview = () => {
         id: 'admins',
         title: 'Admins',
         description:
-          'Accounts holding the full set of capabilities. Listed first, because a staff account with the wrong privileges is the most consequential mistake on this page. Admin accounts cannot be created here; this screen is the only place that creates them.',
+          'Full-privilege accounts appear first, since incorrect staff access is the biggest risk. Admin accounts cannot be created here.',
         // No search box reaches this section and the cohort filters skip staff rows, so an
         // empty admin list is always the platform's own state: the note never has to hedge
         // about a filter that could have hidden somebody.
@@ -2190,13 +2190,7 @@ export const ProfileReview = () => {
           its own search box inside its own heading, the two cohort selects reach both
           participant sections, and the sort picker is offered only for the ordinary ones. */}
       <p className="-mt-4 text-xs text-muted-foreground">
-        Each participant section searches for itself: the queue's box narrows the queue, the
-        Participants box narrows the list below it, and neither reaches the other section --
-        or the staff sections above, which have no search box because nothing on them is
-        being searched. The year and department filters apply to both participant sections
-        only: admins and moderators have neither to match on, so those two sections stay
-        complete whatever you pick here. Sort orders Participants only; the queue stays in
-        removal order.
+        Searches apply only to their own section. Year and department filters affect both participant sections, not admins or moderators. Sorting applies only to Participants; the queue stays in removal order.
       </p>
     </>
   );

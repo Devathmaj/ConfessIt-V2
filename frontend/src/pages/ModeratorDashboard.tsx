@@ -17,7 +17,6 @@ import { AdminNavigation } from '@/components/AdminNavigation';
 import { CAPABILITIES } from '@/lib/capabilities';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import {
   getAdminConfessionReports,
@@ -429,31 +428,6 @@ export const ModeratorDashboard = () => {
             </div>
           </section>
         )}
-
-        <section className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">The line between this page and the console</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm text-muted-foreground">
-              <p>
-                Every figure above is a queue you can open and rule on. The platform counters are
-                deliberately absent: how many accounts exist, how many are blocked and who is
-                signed in are admin-only, so there is nothing here that is a stale copy of
-                them, and this page asks for none of it.
-              </p>
-              <p>
-                What a moderator does: read every content queue, and hide, remove, approve or
-                reject what is in it. Rule on a report either way -- dismiss it, or take the
-                content behind it down -- and the ruling is recorded.
-              </p>
-              <p className="text-xs">
-                Creating, editing, blocking or unblocking an account, the active-session list and
-                the application settings stay with an admin.
-              </p>
-            </CardContent>
-          </Card>
-        </section>
 
         <footer className="pb-6 text-center text-xs text-muted-foreground">
           ConfessIt Moderation &middot; figures are the queues, nothing more

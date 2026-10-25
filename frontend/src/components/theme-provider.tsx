@@ -30,7 +30,7 @@ import {
 
 interface ThemeProviderProps {
   children: React.ReactNode;
-  /** Used until a stored preference exists. The product default is dark. */
+  /** Used until a stored preference exists. The product default is light. */
   defaultTheme?: Theme;
   /** Where the preference is persisted; index.html reads the same key. */
   storageKey?: string;
@@ -38,7 +38,7 @@ interface ThemeProviderProps {
 
 export function ThemeProvider({
   children,
-  defaultTheme = "dark",
+  defaultTheme = "light",
   storageKey = THEME_STORAGE_KEY,
 }: ThemeProviderProps) {
   const [theme, setThemeState] = React.useState<Theme>(() =>

@@ -90,7 +90,7 @@ async function openPicker() {
       </MemoryRouter>
     </AuthContext.Provider>,
   );
-  const textarea = await screen.findByPlaceholderText('Write your heartfelt message here...');
+  const textarea = await screen.findByLabelText('Your Message');
   fireEvent.change(textarea, { target: { value: 'thinking of you' } });
   fireEvent.click(screen.getByRole('button', { name: /send your love note/i }));
   await screen.findByText('Select Your Recipient');
@@ -131,7 +131,7 @@ describe('LoveNotesPage: recipient picker', () => {
         </MemoryRouter>
       </AuthContext.Provider>,
     );
-    await screen.findByPlaceholderText('Write your heartfelt message here...');
+    await screen.findByLabelText('Your Message');
 
     expect(api.getLoveNoteRecipients).not.toHaveBeenCalled();
   });

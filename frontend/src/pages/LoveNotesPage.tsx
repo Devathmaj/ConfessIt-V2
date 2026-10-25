@@ -1022,7 +1022,6 @@ const [cohorts, setCohorts] = useState<Cohort[]>([]);
                                          <Label htmlFor="message" className="text-romantic font-semibold">Your Message</Label>
                                          <Textarea
                                             id="message"
-                                            placeholder="Write your heartfelt message here..."
                                             value={noteMessage}
                                             onChange={(e) => handleMessageChange(e.target.value)}
                                             rows={4}

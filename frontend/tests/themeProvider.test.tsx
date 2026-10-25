@@ -35,7 +35,7 @@ const Probe = () => {
 
 const renderProvider = () =>
   render(
-    <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
+    <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">
       <Probe />
     </ThemeProvider>,
   );
@@ -66,19 +66,19 @@ describe('ThemeProvider', () => {
   });
 
   it('applies the saved preference from the bootstrap storage key', () => {
-    window.localStorage.setItem('vite-ui-theme', 'light');
+    window.localStorage.setItem('vite-ui-theme', 'dark');
     renderProvider();
 
-    expect(screen.getByTestId('theme')).toHaveTextContent('light');
-    expect(document.documentElement.classList.contains('dark')).toBe(false);
-    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    expect(screen.getByTestId('theme')).toHaveTextContent('dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
   });
 
-  it('defaults to dark with an empty store, like index.html', () => {
+  it('defaults to light with an empty store, like index.html', () => {
     renderProvider();
 
-    expect(screen.getByTestId('resolved')).toHaveTextContent('dark');
-    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(screen.getByTestId('resolved')).toHaveTextContent('light');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
   });
 
   it('applies and persists a toggle', () => {
@@ -105,9 +105,9 @@ describe('ThemeProvider', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
   });
 
-  it('falls back to the dark default outside the provider', () => {
+  it('falls back to the light default outside the provider', () => {
     render(<Probe />);
 
-    expect(screen.getByTestId('resolved')).toHaveTextContent('dark');
+    expect(screen.getByTestId('resolved')).toHaveTextContent('light');
   });
 });

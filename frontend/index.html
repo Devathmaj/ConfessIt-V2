@@ -31,20 +31,20 @@
     <!-- Theme bootstrap (color guide Appendix C): apply the saved theme before first
          paint so neither the class-based dark variant nor the data-theme tokens flash.
          Same storage key the theme provider uses ("vite-ui-theme"); product default is
-         dark (see src/main.tsx defaultTheme), so an empty store resolves to dark. Sets
+         light (see src/main.tsx defaultTheme), so an empty store resolves to light. Sets
          BOTH the .dark class (Tailwind dark: variant) and data-theme (semantic tokens). -->
     <script>
       (function () {
         try {
           var saved = localStorage.getItem('vite-ui-theme');
-          var theme = saved === 'light' || saved === 'dark' ? saved : 'dark';
+          var theme = saved === 'light' || saved === 'dark' ? saved : 'light';
           var root = document.documentElement;
           root.setAttribute('data-theme', theme);
           root.classList.toggle('dark', theme === 'dark');
           var meta = document.querySelector('meta[name="theme-color"]');
           if (meta) meta.setAttribute('content', theme === 'dark' ? '#181014' : '#FFE5F2');
         } catch (e) {
-          document.documentElement.setAttribute('data-theme', 'dark');
+          document.documentElement.setAttribute('data-theme', 'light');
         }
       })();
     </script>

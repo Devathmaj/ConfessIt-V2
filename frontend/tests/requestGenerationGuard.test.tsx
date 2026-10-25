@@ -170,7 +170,7 @@ describe('LoveNotesPage: a slow answer for an old recipient filter', () => {
         </MemoryRouter>
       </AuthContext.Provider>,
     );
-    const textarea = await screen.findByPlaceholderText('Write your heartfelt message here...');
+    const textarea = await screen.findByLabelText('Your Message');
     fireEvent.change(textarea, { target: { value: 'thinking of you' } });
     fireEvent.click(screen.getByRole('button', { name: /send your love note/i }));
     await screen.findByText('Select Your Recipient');
