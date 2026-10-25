@@ -25,7 +25,14 @@ rule_files:
   - /etc/prometheus/alerting-rules.yml
 
 scrape_configs:
+  # Basic auth is required on every HTTP surface by prometheus-web.yml, and that
+  # includes /metrics. Without these credentials this self-scrape is answered with
+  # 401, so up{job="prometheus"} reads 0 forever. The password is read from the same
+  # mounted file Tempo and the healthcheck use, so it stays out of this tracked file.
   - job_name: "prometheus"
+    basic_auth:
+      username: tempo
+      password_file: /etc/prometheus/rw-password
     static_configs:
       - targets: ["prometheus:9090"]
 

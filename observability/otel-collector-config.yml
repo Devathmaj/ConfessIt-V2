@@ -48,6 +48,24 @@ processors:
         action: delete
 
 service:
+  # The collector's own telemetry (otelcol_receiver_*, otelcol_exporter_*, process
+  # metrics) is what Prometheus scrapes on :8888 and what every panel in the
+  # dashboard's pipeline section reads. Since 0.123 the default telemetry reader
+  # binds its Prometheus server to localhost:8888, which is reachable from inside
+  # this container only -- a scrape from Prometheus on another container hits
+  # 172.x.x.x:8888 and gets connection refused, so up{job="otel-collector-internal"}
+  # reads 0 and the dashboard shows the collector as DOWN even though it is fine.
+  # Binding explicitly to 0.0.0.0 is what makes the endpoint scrapeable across the
+  # Compose network. This is not published to the host; it stays on the internal
+  # observability network like every other collector port.
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
   pipelines:
     logs:
       receivers: [otlp]

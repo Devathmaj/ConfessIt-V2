@@ -211,6 +211,7 @@ services:
     expose:
       - "4317"
       - "4318"
+      - "8888"
       - "8889"
     volumes:
       - ./observability/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
