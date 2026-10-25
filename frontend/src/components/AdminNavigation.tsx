@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { NavLink } from "react-router-dom";
-import { Heart, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag, LogOut, Gamepad2, Bell } from "lucide-react";
+import { Heart, Settings, ShieldQuestion, MessageCircleHeart, UsersRound, Menu, X, Flag, LogOut, Gamepad2, Bell, Info } from "lucide-react";
 import { ModeToggle } from "@/components/ui/ModeToggle";
 import { useAuth } from "@/contexts/AuthContext";
 import { CAPABILITIES, Capability } from "@/lib/capabilities";
@@ -136,6 +136,19 @@ export const AdminNavigation = () => {
         </div>
 
         <div className="hidden items-center gap-2 xl:flex flex-shrink-0">
+          {/* About carries the privacy policy, terms and disclaimer, so it stays available
+              to staff. It sits with the actions rather than the pill row: that row is already
+              at the width it can hold on an admin's bar. */}
+          <NavLink
+            to="/about"
+            aria-label="About"
+            title="About"
+            className={({ isActive }) =>
+              `p-2 transition-colors duration-200 [border-radius:var(--edge-pill)] ${isActive ? activeLink : inactiveLink}`
+            }
+          >
+            <Info className="h-5 w-5" />
+          </NavLink>
           <ModeToggle />
           {isAuthenticated && (
             <button
@@ -166,6 +179,14 @@ export const AdminNavigation = () => {
         <div className="mt-2 [border-radius:var(--edge-card)] border border-[var(--nav-border)] bg-[var(--nav-bg)] p-4 shadow-[var(--shadow-nav)] backdrop-blur-xl xl:hidden">
           <div className="flex flex-col gap-2">
             {visibleItems.map(renderLink)}
+            <NavLink
+              to="/about"
+              onClick={() => setOpen(false)}
+              className={({ isActive }) => `${baseLink} ${isActive ? activeLink : inactiveLink}`}
+            >
+              <Info className="h-4 w-4" />
+              <span>About</span>
+            </NavLink>
           </div>
           <div className="mt-4 space-y-2">
             <div className="flex items-center justify-between [border-radius:var(--edge-card-sm)] border border-[var(--nav-border)] px-3 py-2">

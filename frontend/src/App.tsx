@@ -6,7 +6,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
-import { CAPABILITIES, Capability } from "./lib/capabilities";
+import { CAPABILITIES, Capability, isStaffAccount } from "./lib/capabilities";
 import { landingPathFor } from "./lib/landing";
 import { rememberVisitedPage } from "./lib/navigationMemory";
 import { Login, AdminLogin, ModeratorLogin } from "./pages/Login";
@@ -127,13 +127,9 @@ export const ParticipantOnlyRoute = ({ children }: { children: ReactNode }) => {
     return <Navigate to={signInPath} replace />;
   }
 
-  // Staff users (those with staff capabilities) cannot access participant routes
-  const isStaff = can(CAPABILITIES.STATS_READ) || can(CAPABILITIES.REPORTS_REVIEW) ||
-    can(CAPABILITIES.CONFESSIONS_REVIEW) || can(CAPABILITIES.LOVE_NOTES_REVIEW) ||
-    can(CAPABILITIES.USERS_REVIEW) || can(CAPABILITIES.APP_CONFIG_READ);
-  const accountType = user?.account_type;
-  const isStaffByType = accountType === 'admin' || accountType === 'moderator';
-  if (isStaff || isStaffByType) {
+  // Staff users (those with staff capabilities, or a staff account row) cannot access
+  // participant routes.
+  if (isStaffAccount(user?.capabilities, user?.account_type)) {
     return <Navigate to={landingPathFor(can)} replace />;
   }
 
@@ -457,12 +453,15 @@ const AppRoutes = () => {
       {/* The old /mini-games page is gone; deep links retire to the section that replaced
           it rather than 404ing. */}
       <Route path="/mini-games" element={<Navigate to="/games" replace />} />
+      {/* Shared by participants and staff: the legal and privacy pages must be readable
+          from either side of the app, so this is authentication-only rather than
+          participant-only. The page itself swaps in the staff navigation for staff. */}
       <Route
         path="/about"
         element={
-          <ParticipantOnlyRoute>
+          <ProtectedRoute>
             <About />
-          </ParticipantOnlyRoute>
+          </ProtectedRoute>
         }
       />
 

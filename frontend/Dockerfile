@@ -13,6 +13,9 @@ WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
+# The About page imports the canonical legal documents with Vite's `?raw` loader.
+# `../../../docs` from src/pages resolves to /docs in this image.
+COPY docs/ /docs/
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build:prod

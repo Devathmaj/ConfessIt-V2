@@ -1,15 +1,37 @@
+import { useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { LegalDocument } from '@/components/LegalDocument';
 import { HeartDivider } from '@/components/edge/EdgeOrnament';
 import { Heart, Info, Users, Gamepad2, Mail, Shuffle } from 'lucide-react';
 import { Navigation } from '@/components/Navigation';
+import { AdminNavigation } from '@/components/AdminNavigation';
+import { useAuth } from '@/contexts/AuthContext';
+import { isStaffAccount } from '@/lib/capabilities';
 import { FloatingHearts } from '@/components/ui/floating-hearts';
 import { FloralDecor } from '@/components/FloralDecor';
 import { ScatteredIcons } from '@/components/ScatteredIcons';
+import aboutDocument from '../../../docs/About.md?raw';
+import privacyPolicy from '../../../docs/Privacy-Policy.md?raw';
+import termsOfService from '../../../docs/Terms-of-Service.md?raw';
+import disclaimer from '../../../docs/Disclaimer.md?raw';
 
 export const About = () => {
+  const [activeDocument, setActiveDocument] = useState('about');
+  const policiesRef = useRef<HTMLDivElement>(null);
+  const { user } = useAuth();
+  const isStaff = isStaffAccount(user?.capabilities, user?.account_type);
+
+  // Switching documents should start the reader at the top of the policy section rather
+  // than leaving them halfway down a different policy.
+  const changeDocument = (value: string) => {
+    setActiveDocument(value);
+    policiesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div className="min-h-screen p-4 pt-24 relative overflow-hidden">
-      <Navigation />
+      {isStaff ? <AdminNavigation /> : <Navigation />}
       <FloatingHearts />
       {/* Floral preview: cropped blossom, left edge centered. */}
       <FloralDecor pair={5} className="left-0 top-1/2 w-[32rem] -translate-y-1/2 opacity-90 sm:w-[38rem]" />
@@ -111,6 +133,37 @@ export const About = () => {
               <p>Break the ice in the Games section: pick from a growing library of mini-games, chase daily featured picks and climb the leaderboards. Play with your matches and get to know them in a fun and relaxed way — Truth or Dare, Compatibility Quiz and more are waiting.</p>
             </CardContent>
           </Card>
+        </div>
+
+        <div ref={policiesRef} className="mt-12 min-w-0 scroll-mt-24">
+          <h2 className="text-4xl font-dancing text-romantic text-center mb-2">Information & Policies</h2>
+          <p className="text-center text-muted-foreground mb-6">
+            Read about ConfessIt, our privacy practices, terms of service, and disclaimer.
+          </p>
+          <Tabs
+            value={activeDocument}
+            onValueChange={changeDocument}
+            className="confession-card min-w-0 max-w-full p-4 sm:p-6"
+          >
+            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 sm:grid-cols-4">
+              <TabsTrigger value="about">About</TabsTrigger>
+              <TabsTrigger value="privacy">Privacy Policy</TabsTrigger>
+              <TabsTrigger value="terms">Terms of Service</TabsTrigger>
+              <TabsTrigger value="disclaimer">Disclaimer</TabsTrigger>
+            </TabsList>
+            <TabsContent value="about" className="mt-6 min-w-0">
+              <LegalDocument markdown={aboutDocument} onDocumentLink={changeDocument} />
+            </TabsContent>
+            <TabsContent value="privacy" className="mt-6 min-w-0">
+              <LegalDocument markdown={privacyPolicy} onDocumentLink={changeDocument} />
+            </TabsContent>
+            <TabsContent value="terms" className="mt-6 min-w-0">
+              <LegalDocument markdown={termsOfService} onDocumentLink={changeDocument} />
+            </TabsContent>
+            <TabsContent value="disclaimer" className="mt-6 min-w-0">
+              <LegalDocument markdown={disclaimer} onDocumentLink={changeDocument} />
+            </TabsContent>
+          </Tabs>
         </div>
 
         <div className="mt-8" aria-hidden>

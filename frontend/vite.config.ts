@@ -13,6 +13,11 @@ export default defineConfig(({ mode }) => ({
     // same reason; production serves built assets behind Nginx instead.
     host: "127.0.0.1",
     port: 8080,
+    // The About page imports docs/*.md from the repository root with `?raw`.
+    // The docs directory sits outside this Vite root, so allow it explicitly.
+    fs: {
+      allow: [path.resolve(__dirname), path.resolve(__dirname, "../docs")],
+    },
     // Document-level hardening for local dev. Deliberately no `Content-Security-Policy`
     // here: Vite's dev server needs inline scripts and eval for HMR, so any dev CSP is
     // either broken or `unsafe-*` theatre -- the real policy is enforced by prod Nginx

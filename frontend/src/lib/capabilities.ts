@@ -64,3 +64,22 @@ export const asAccountType = (value: unknown): AccountType =>
 /** Whether `capabilities` carries `required`. An absent list carries nothing. */
 export const can = (capabilities: readonly string[] | undefined, required: Capability): boolean =>
   Array.isArray(capabilities) && capabilities.includes(required);
+
+/**
+ * Whether an account belongs on the staff side of the app.
+ *
+ * Mirrors the route guard's definition: a staff capability, or a row in the admin or
+ * moderator table. Used to choose the staff navigation on shared pages such as About.
+ */
+export const isStaffAccount = (
+  capabilities: readonly string[] | undefined,
+  accountType?: string,
+): boolean =>
+  can(capabilities, CAPABILITIES.STATS_READ) ||
+  can(capabilities, CAPABILITIES.REPORTS_REVIEW) ||
+  can(capabilities, CAPABILITIES.CONFESSIONS_REVIEW) ||
+  can(capabilities, CAPABILITIES.LOVE_NOTES_REVIEW) ||
+  can(capabilities, CAPABILITIES.USERS_REVIEW) ||
+  can(capabilities, CAPABILITIES.APP_CONFIG_READ) ||
+  accountType === 'admin' ||
+  accountType === 'moderator';
