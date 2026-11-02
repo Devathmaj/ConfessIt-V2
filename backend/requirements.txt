@@ -1,16 +1,16 @@
-fastapi==0.143.0
+fastapi==0.162.0
 uvicorn[standard]==0.54.0
-starlette==1.7.0
-pydantic[email]==2.14.0
+starlette==1.10.0
+pydantic[email]==2.14.2
 psycopg[binary]==3.3.6
-pydantic-settings==2.15.0
+pydantic-settings==2.16.2
 PyJWT==2.15.1
 python-multipart==0.0.32
 httpx==0.28.1
 cloudinary==1.46.3
-Pillow==12.3.0
+Pillow==13.0.0
 # Excel workbook parsing for bulk participant onboarding.
-openpyxl==3.1.2
+openpyxl==3.1.5
 redis==8.1.0
 # Azure AI Content Safety SDK for text analysis and moderation.
 azure-ai-contentsafety==1.0.0
@@ -19,24 +19,24 @@ isodate==0.7.2
 # Azure AI Language text analytics SDK for PII detection.
 azure-ai-textanalytics==5.4.0
 # LLM provider SDKs for story generation.
-openai==1.99.5
+openai==3.41.0
 groq==1.7.0
 # WebSockets are handled directly by Starlette/FastAPI.
-opentelemetry-api==1.45.1
-opentelemetry-sdk==1.45.1
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
 # OpenTelemetry semantic conventions pinned for instrumentation.
-opentelemetry-semantic-conventions==0.66b1
-opentelemetry-instrumentation-fastapi==0.66b1
+opentelemetry-semantic-conventions==0.66b2
+opentelemetry-instrumentation-fastapi==0.66b2
 # OpenTelemetry instrumentation libraries.
-opentelemetry-instrumentation-redis==0.66b1
-opentelemetry-instrumentation-sqlalchemy==0.66b1
-opentelemetry-instrumentation-urllib3==0.66b1
-opentelemetry-exporter-otlp-proto-grpc==1.45.1
-SQLAlchemy==2.1.4
+opentelemetry-instrumentation-redis==0.66b2
+opentelemetry-instrumentation-sqlalchemy==0.66b2
+opentelemetry-instrumentation-urllib3==0.66b2
+opentelemetry-exporter-otlp-proto-grpc==1.45.2
+SQLAlchemy==2.1.6
 # Schema revisions are applied at startup and by one-off scripts.
-alembic==1.18.4
+alembic==1.20.1
 # pgvector Python bindings for vector embedding columns.
-pgvector==0.4.2
-numpy==2.2.6
+pgvector==0.5.1
+numpy==2.5.4
 # Cryptography library for AES-256-GCM chat encryption.
 cryptography==50.0.2
